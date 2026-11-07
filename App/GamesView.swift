@@ -217,6 +217,16 @@ struct GamesView: View {
             Text("Key generation: \(byteDescription(result.keyGeneration))")
                 .font(.caption)
 
+            HStack(spacing: 6) {
+                Text("Rights ID:")
+                    .font(.caption)
+                    .fontWeight(.medium)
+
+                Text(rightsIDDescription(result.rightsIDPresent))
+                    .font(.caption)
+                    .foregroundStyle(rightsIDColor(result.rightsIDPresent))
+            }
+
             Text("File size: \(formattedFileSize)")
                 .font(.caption)
 
@@ -287,6 +297,22 @@ struct GamesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.cyan.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func rightsIDDescription(_ value: Bool?) -> String {
+        guard let value else {
+            return "Unavailable"
+        }
+
+        return value ? "Present" : "Not present"
+    }
+
+    private func rightsIDColor(_ value: Bool?) -> Color {
+        guard let value else {
+            return .secondary
+        }
+
+        return value ? .orange : .green
     }
 
     private func byteDescription(_ value: UInt8?) -> String {
