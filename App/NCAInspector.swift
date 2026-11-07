@@ -1,4 +1,3 @@
-
 import Foundation
 import CommonCrypto
 
@@ -9,6 +8,10 @@ struct NCASectionInfo {
     let offsetBytes: UInt64
     let sizeBytes: UInt64
     let isValid: Bool
+
+    let fsType: UInt8
+    let hashType: UInt8
+    let encryptionType: UInt8
 }
 
 struct NCAInspection {
@@ -26,6 +29,8 @@ enum NCAInspector {
 
     private static let sectionTableOffset = 0x240
     private static let sectionEntrySize = 0x10
+    private static let fsHeaderOffset = 0x400
+    private static let fsHeaderSize = 0x200
     private static let mediaUnitSize: UInt64 = 0x200
 
     static func inspect(_ url: URL) -> NCAInspection {
@@ -118,7 +123,7 @@ enum NCAInspector {
                 cryptoType: header[0x206],
                 keyGeneration: header[0x207],
                 fileSize: fileSize,
-                message: "NCA3 header successfully decrypted. Raw section table values inspected.",
+                message: "NCA3 header decrypted. Section ranges and filesystem headers inspected.",
                 sections: sections
             )
 
@@ -143,11 +148,11 @@ enum NCAInspector {
         var sections: [NCASectionInfo] = []
 
         for index in 0..<4 {
-            let base = sectionTableOffset +
+            let tableOffset = sectionTableOffset +
                 index * sectionEntrySize
 
-            let start = readUInt32(header, at: base)
-            let end = readUInt32(header, at: base + 4)
+            let start = readUInt32(header, at: tableOffset)
+            let end = readUInt32(header, at: tableOffset + 4)
 
             let offset = UInt64(start) * mediaUnitSize
             let endOffset = UInt64(end) * mediaUnitSize
@@ -160,6 +165,13 @@ enum NCAInspector {
                 ? endOffset - offset
                 : 0
 
+            let fsOffset = fsHeaderOffset +
+                index * fsHeaderSize
+
+            let fsType = readUInt8(header, at: fsOffset + 0x02)
+            let hashType = readUInt8(header, at: fsOffset + 0x03)
+            let encryptionType = readUInt8(header, at: fsOffset + 0x04)
+
             sections.append(
                 NCASectionInfo(
                     index: index,
@@ -167,12 +179,26 @@ enum NCAInspector {
                     endMediaUnit: end,
                     offsetBytes: offset,
                     sizeBytes: size,
-                    isValid: valid
+                    isValid: valid,
+                    fsType: fsType,
+                    hashType: hashType,
+                    encryptionType: encryptionType
                 )
             )
         }
 
         return sections
+    }
+
+    private static func readUInt8(
+        _ bytes: [UInt8],
+        at offset: Int
+    ) -> UInt8 {
+        guard offset >= 0 && offset < bytes.count else {
+            return 0
+        }
+
+        return bytes[offset]
     }
 
     private static func readUInt32(
