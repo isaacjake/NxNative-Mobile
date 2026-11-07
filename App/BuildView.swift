@@ -1,60 +1,46 @@
+
 import SwiftUI
 
 struct BuildView: View {
-    @State private var selectedDevice = "Standard"
-    @State private var buildStatus = "Not started"
-
-    private let devices = [
-        "Standard",
-        "iPhone 15 or older",
-        "iPhone 15 Pro or newer"
-    ]
-
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Build Configuration") {
-                    Picker("Device Compatibility", selection: $selectedDevice) {
-                        ForEach(devices, id: \.self) { device in
-                            Text(device).tag(device)
-                        }
-                    }
-                }
+            List {
+                Section("NxNative Engine") {
+                    Label("Engine not connected", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
 
-                Section("Compilation") {
-                    Label("NxNative Engine", systemImage: "cpu")
-                    Text("Not connected yet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Label("iOS Native Compiler", systemImage: "hammer")
-                    Text("Not implemented yet")
-                        .font(.caption)
+                    Text("The NxNative compiler has not yet been integrated into this app.")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Build Status") {
-                    HStack {
-                        Text("Status")
-                        Spacer()
-                        Text(buildStatus)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button {
-                        buildStatus = "Engine not configured"
-                    } label: {
-                        Label("Start Build", systemImage: "play.fill")
-                    }
+                Section("Official Build Requirements") {
+                    requirement("macOS 26.6 or later")
+                    requirement("Xcode 27.2")
+                    requirement("Python 3.12 or later")
+                    requirement("Your own game files and keys")
                 }
 
-                Section {
-                    Text("This screen is currently a prototype. It does not compile games yet.")
+                Section("iPhone Runtime Requirements") {
+                    requirement("iOS 26 or later")
+                    requirement("iPhone 15 Pro or newer")
+                }
+
+                Section("Our Development Goal") {
+                    Text("Build a workflow that runs entirely on the iPhone, without a Mac, Xcode, or hosted build runners.")
+                        .font(.footnote)
+
+                    Text("This capability is not implemented yet. We need to develop and test an alternative to the official Mac-based build pipeline.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Build")
         }
+    }
+
+    private func requirement(_ title: String) -> some View {
+        Label(title, systemImage: "checkmark.circle")
+            .font(.subheadline)
     }
 }
