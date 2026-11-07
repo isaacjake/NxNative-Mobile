@@ -1,3 +1,4 @@
+
 import Foundation
 
 struct PFS0Entry: Identifiable {
@@ -19,49 +20,33 @@ enum PFS0Error: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidHeader:
-            return "Invalid PFS0 header."
-        case .invalidEntryCount:
-            return "Invalid number of archive entries."
-        case .invalidStringTable:
-            return "Invalid archive string table."
-        case .invalidFilename:
-            return "Invalid archive filename."
-        case .truncatedArchive:
-            return "The archive is incomplete or truncated."
-        case .invalidOffset:
-            return "An entry points outside the archive."
-        case .unsafeFilename:
-            return "The entry has an unsafe filename."
-        case .outputCreationFailed:
-            return "Could not create the extracted file."
+        case .invalidHeader: return "Invalid PFS0 header."
+        case .invalidEntryCount: return "Invalid number of archive entries."
+        case .invalidStringTable: return "Invalid archive string table."
+        case .invalidFilename: return "Invalid archive filename."
+        case .truncatedArchive: return "The archive is incomplete or truncated."
+        case .invalidOffset: return "An entry points outside the archive."
+        case .unsafeFilename: return "The entry has an unsafe filename."
+        case .outputCreationFailed: return "Could not create the extracted file."
         }
     }
 }
 
 struct PFS0Archive {
-
     let entries: [PFS0Entry]
-
     private let archiveURL: URL
     private let dataOffset: UInt64
 
     static func open(_ url: URL) throws -> PFS0Archive {
-
         let handle = try FileHandle(forReadingFrom: url)
-
-        defer {
-            try? handle.close()
-        }
+        defer { try? handle.close() }
 
         let fileSize = try handle.seekToEnd()
-
         guard fileSize >= 16 else {
             throw PFS0Error.truncatedArchive
         }
 
         try handle.seek(toOffset: 0)
-
         let header = try readExactly(handle, count: 16)
 
         guard header.prefix(4) == Data("PFS0".utf8) else {
@@ -80,10 +65,7 @@ struct PFS0Archive {
             throw PFS0Error.invalidStringTable
         }
 
-        let tableSize = count.multipliedReportingOverflow(
-            by: 0x18
-        )
-
+        let tableSize = count.multipliedReportingOverflow(by: 0x18)
         guard !tableSize.overflow else {
             throw PFS0Error.invalidEntryCount
         }
@@ -100,7 +82,6 @@ struct PFS0Archive {
             handle,
             count: tableSize.partialValue
         )
-
         let stringTable = try readExactly(
             handle,
             count: stringTableSize
@@ -109,15 +90,10 @@ struct PFS0Archive {
         var results: [PFS0Entry] = []
 
         for index in 0..<count {
-
             let base = index * 0x18
-
             let offset = readUInt64(rawEntries, at: base)
             let size = readUInt64(rawEntries, at: base + 8)
-
-            let nameOffset = Int(
-                readUInt32(rawEntries, at: base + 16)
-            )
+            let nameOffset = Int(readUInt32(rawEntries, at: base + 16))
 
             guard nameOffset < stringTable.count else {
                 throw PFS0Error.invalidFilename
@@ -163,7 +139,8 @@ struct PFS0Archive {
 
     func extract(
         _ entry: PFS0Entry,
-        to directory: URL
+        to directory: URL,
+        progress: ((UInt64, UInt64) -> Void)? = nil
     ) throws -> URL {
 
         guard entries.contains(where: {
@@ -194,12 +171,8 @@ struct PFS0Archive {
             "\(entry.id)-\(safeName)"
         )
 
-        if FileManager.default.fileExists(
-            atPath: destination.path
-        ) {
-            try FileManager.default.removeItem(
-                at: destination
-            )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
         }
 
         guard FileManager.default.createFile(
@@ -210,67 +183,56 @@ struct PFS0Archive {
         }
 
         do {
-
-            let input = try FileHandle(
-                forReadingFrom: archiveURL
-            )
-
-            let output = try FileHandle(
-                forWritingTo: destination
-            )
+            let input = try FileHandle(forReadingFrom: archiveURL)
+            let output = try FileHandle(forWritingTo: destination)
 
             defer {
                 try? input.close()
                 try? output.close()
             }
 
-            let start = dataOffset.addingReportingOverflow(
-                entry.offset
-            )
-
+            let start = dataOffset.addingReportingOverflow(entry.offset)
             guard !start.overflow else {
                 throw PFS0Error.invalidOffset
             }
 
-            try input.seek(
-                toOffset: start.partialValue
-            )
+            try input.seek(toOffset: start.partialValue)
 
             var remaining = entry.size
-
-            // Keep memory usage low for very large files.
+            var copied: UInt64 = 0
             let bufferSize = 256 * 1024
+            let progressInterval: UInt64 = 32 * 1024 * 1024
+            var nextProgress: UInt64 = progressInterval
+
+            progress?(0, entry.size)
 
             while remaining > 0 {
-
                 let amount = Int(
-                    min(
-                        remaining,
-                        UInt64(bufferSize)
-                    )
+                    min(remaining, UInt64(bufferSize))
                 )
 
-                guard let chunk = try input.read(
-                    upToCount: amount
-                ), !chunk.isEmpty else {
+                guard let chunk = try input.read(upToCount: amount),
+                      !chunk.isEmpty else {
                     throw PFS0Error.truncatedArchive
                 }
 
                 try output.write(contentsOf: chunk)
 
-                remaining -= UInt64(chunk.count)
+                let chunkSize = UInt64(chunk.count)
+                remaining -= chunkSize
+                copied += chunkSize
+
+                if copied >= nextProgress || remaining == 0 {
+                    progress?(copied, entry.size)
+                    nextProgress = copied + progressInterval
+                }
             }
 
             try output.synchronize()
-
             return destination
 
         } catch {
-
-            try? FileManager.default.removeItem(
-                at: destination
-            )
-
+            try? FileManager.default.removeItem(at: destination)
             throw error
         }
     }
@@ -279,11 +241,9 @@ struct PFS0Archive {
         _ handle: FileHandle,
         count: Int
     ) throws -> Data {
-
         var result = Data()
 
         while result.count < count {
-
             let chunk = try handle.read(
                 upToCount: count - result.count
             ) ?? Data()
@@ -302,14 +262,10 @@ struct PFS0Archive {
         _ data: Data,
         at offset: Int
     ) -> UInt32 {
-
         var value: UInt32 = 0
-
         for index in 0..<4 {
-            value |= UInt32(data[offset + index])
-                << (index * 8)
+            value |= UInt32(data[offset + index]) << (index * 8)
         }
-
         return value
     }
 
@@ -317,14 +273,10 @@ struct PFS0Archive {
         _ data: Data,
         at offset: Int
     ) -> UInt64 {
-
         var value: UInt64 = 0
-
         for index in 0..<8 {
-            value |= UInt64(data[offset + index])
-                << (index * 8)
+            value |= UInt64(data[offset + index]) << (index * 8)
         }
-
         return value
     }
 }
