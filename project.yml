@@ -1,0 +1,23 @@
+name: NxNativeMobile
+
+options:
+  bundleIdPrefix: com.nxnative
+  deploymentTarget:
+    iOS: "17.0"
+
+targets:
+  NxNativeMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nxnative.mobile
+        PRODUCT_NAME: NxNative
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: NxNative
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
