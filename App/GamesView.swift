@@ -202,10 +202,16 @@ struct GamesView: View {
             Text("Signature: \(result.magic)")
                 .font(.caption)
 
+            Text("Distribution type: \(byteDescription(result.distributionType))")
+                .font(.caption)
+
             Text("Content type: \(byteDescription(result.contentType))")
                 .font(.caption)
 
-            Text("Crypto type: \(byteDescription(result.cryptoType))")
+            Text("Key generation (old): \(byteDescription(result.keyGenerationOld))")
+                .font(.caption)
+
+            Text("Key-area encryption-key index: \(byteDescription(result.keyAreaEncryptionKeyIndex))")
                 .font(.caption)
 
             Text("Key generation: \(byteDescription(result.keyGeneration))")
