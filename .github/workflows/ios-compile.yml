@@ -1,0 +1,51 @@
+
+name: NxNative iOS Compile
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compile iOS App
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+
+      - name: Show build configuration
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project NxNativeMobile.xcodeproj
+
+      - name: Compile for iPhone
+        run: |
+          xcodebuild \
+            -project NxNativeMobile.xcodeproj \
+            -scheme NxNativeMobile \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/NxNativeBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload compiled app
+        uses: actions/upload-artifact@v4
+        with:
+          name: NxNative-iOS-Build
+          path: ${{ runner.temp }}/NxNativeBuild/Build/Products/Debug-iphoneos/NxNative.app
+          if-no-files-found: error
