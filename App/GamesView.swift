@@ -124,21 +124,13 @@ struct GamesView: View {
                                                     extractEntry(entry, from: game)
                                                 } label: {
                                                     if extractingEntries.contains(extractionID) {
-                                                        Label(
-                                                            "Extracting...",
-                                                            systemImage: "arrow.down.doc"
-                                                        )
+                                                        Label("Extracting...", systemImage: "arrow.down.doc")
                                                     } else {
-                                                        Label(
-                                                            "Extract File",
-                                                            systemImage: "arrow.down.doc"
-                                                        )
+                                                        Label("Extract File", systemImage: "arrow.down.doc")
                                                     }
                                                 }
                                                 .buttonStyle(.bordered)
-                                                .disabled(
-                                                    extractingEntries.contains(extractionID)
-                                                )
+                                                .disabled(extractingEntries.contains(extractionID))
 
                                                 if extractingEntries.contains(extractionID) {
                                                     ProgressView(
@@ -149,9 +141,7 @@ struct GamesView: View {
                                                     Text(
                                                         "\(Int((extractionProgress[extractionID] ?? 0) * 100))% — " +
                                                         ByteCountFormatter.string(
-                                                            fromByteCount: Int64(
-                                                                clamping: extractionBytes[extractionID] ?? 0
-                                                            ),
+                                                            fromByteCount: Int64(clamping: extractionBytes[extractionID] ?? 0),
                                                             countStyle: .file
                                                         ) +
                                                         " copied"
@@ -164,8 +154,7 @@ struct GamesView: View {
                                                     Text(message)
                                                         .font(.caption)
                                                         .foregroundStyle(
-                                                            message.hasPrefix("Saved")
-                                                                ? .green : .orange
+                                                            message.hasPrefix("Saved") ? .green : .orange
                                                         )
                                                 }
 
@@ -214,12 +203,8 @@ struct GamesView: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             Label(
-                result.isRecognized
-                    ? "NCA Signature Recognized"
-                    : "NCA Not Recognized",
-                systemImage: result.isRecognized
-                    ? "checkmark.circle.fill"
-                    : "exclamationmark.triangle.fill"
+                result.isRecognized ? "NCA Signature Recognized" : "NCA Not Recognized",
+                systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
             )
             .font(.subheadline)
             .foregroundStyle(result.isRecognized ? .green : .orange)
@@ -264,9 +249,7 @@ struct GamesView: View {
 
                             Text(section.isValid ? "Valid range" : "Check range")
                                 .font(.caption)
-                                .foregroundStyle(
-                                    section.isValid ? .green : .orange
-                                )
+                                .foregroundStyle(section.isValid ? .green : .orange)
                         }
 
                         Text("Start media unit: \(section.startMediaUnit)")
@@ -278,11 +261,13 @@ struct GamesView: View {
                         Text("Offset: \(section.offsetBytes) bytes")
                             .font(.caption)
 
-                        Text("Size: \(ByteCountFormatter.string(
+                        let sectionSize = ByteCountFormatter.string(
                             fromByteCount: Int64(clamping: section.sizeBytes),
                             countStyle: .file
-                        ))")
-                        .font(.caption)
+                        )
+
+                        Text("Size: \(sectionSize)")
+                            .font(.caption)
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -347,14 +332,8 @@ struct GamesView: View {
                 )[0]
 
                 let outputFolder = documents
-                    .appendingPathComponent(
-                        "NxNativeExtracted",
-                        isDirectory: true
-                    )
-                    .appendingPathComponent(
-                        game.id.uuidString,
-                        isDirectory: true
-                    )
+                    .appendingPathComponent("NxNativeExtracted", isDirectory: true)
+                    .appendingPathComponent(game.id.uuidString, isDirectory: true)
 
                 let savedURL = try archive.extract(
                     entry,
@@ -362,11 +341,8 @@ struct GamesView: View {
                 ) { copied, total in
                     DispatchQueue.main.async {
                         extractionBytes[extractionID] = copied
-
                         extractionProgress[extractionID] =
-                            total > 0
-                            ? Double(copied) / Double(total)
-                            : 0
+                            total > 0 ? Double(copied) / Double(total) : 0
                     }
                 }
 
@@ -376,8 +352,7 @@ struct GamesView: View {
                     : nil
 
                 DispatchQueue.main.async {
-                    extractionMessages[extractionID] =
-                        "Saved: \(savedURL.lastPathComponent)"
+                    extractionMessages[extractionID] = "Saved: \(savedURL.lastPathComponent)"
 
                     if let ncaResult {
                         ncaResults[extractionID] = ncaResult
@@ -391,7 +366,6 @@ struct GamesView: View {
                 DispatchQueue.main.async {
                     extractionMessages[extractionID] =
                         "Extraction failed: \(error.localizedDescription)"
-
                     extractingEntries.remove(extractionID)
                 }
             }
