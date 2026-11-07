@@ -1,4 +1,3 @@
-
 import Foundation
 
 struct PFS0Entry: Identifiable {
@@ -42,6 +41,7 @@ struct PFS0Archive {
         defer { try? handle.close() }
 
         let fileSize = try handle.seekToEnd()
+
         guard fileSize >= 16 else {
             throw PFS0Error.truncatedArchive
         }
@@ -66,6 +66,7 @@ struct PFS0Archive {
         }
 
         let tableSize = count.multipliedReportingOverflow(by: 0x18)
+
         guard !tableSize.overflow else {
             throw PFS0Error.invalidEntryCount
         }
@@ -82,6 +83,7 @@ struct PFS0Archive {
             handle,
             count: tableSize.partialValue
         )
+
         let stringTable = try readExactly(
             handle,
             count: stringTableSize
@@ -192,6 +194,7 @@ struct PFS0Archive {
             }
 
             let start = dataOffset.addingReportingOverflow(entry.offset)
+
             guard !start.overflow else {
                 throw PFS0Error.invalidOffset
             }
@@ -200,6 +203,7 @@ struct PFS0Archive {
 
             var remaining = entry.size
             var copied: UInt64 = 0
+
             let bufferSize = 256 * 1024
             let progressInterval: UInt64 = 32 * 1024 * 1024
             var nextProgress: UInt64 = progressInterval
@@ -211,14 +215,17 @@ struct PFS0Archive {
                     min(remaining, UInt64(bufferSize))
                 )
 
-                guard let chunk = try input.read(upToCount: amount),
-                      !chunk.isEmpty else {
-                    throw PFS0Error.truncatedArchive
+                let chunkSize: UInt64 = try autoreleasepool {
+                    guard let chunk = try input.read(upToCount: amount),
+                          !chunk.isEmpty else {
+                        throw PFS0Error.truncatedArchive
+                    }
+
+                    try output.write(contentsOf: chunk)
+
+                    return UInt64(chunk.count)
                 }
 
-                try output.write(contentsOf: chunk)
-
-                let chunkSize = UInt64(chunk.count)
                 remaining -= chunkSize
                 copied += chunkSize
 
@@ -263,9 +270,11 @@ struct PFS0Archive {
         at offset: Int
     ) -> UInt32 {
         var value: UInt32 = 0
+
         for index in 0..<4 {
             value |= UInt32(data[offset + index]) << (index * 8)
         }
+
         return value
     }
 
@@ -274,9 +283,11 @@ struct PFS0Archive {
         at offset: Int
     ) -> UInt64 {
         var value: UInt64 = 0
+
         for index in 0..<8 {
             value |= UInt64(data[offset + index]) << (index * 8)
         }
+
         return value
     }
 }
