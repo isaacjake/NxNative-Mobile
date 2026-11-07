@@ -7,6 +7,8 @@ struct GamesView: View {
     let deleteAction: (ImportedGame) -> Void
 
     @State private var inspectionResults: [UUID: GameFileInspection] = [:]
+    @State private var archiveResults: [UUID: [PFS0Entry]] = [:]
+    @State private var archiveErrors: [UUID: String] = [:]
 
     var body: some View {
         NavigationStack {
@@ -51,8 +53,7 @@ struct GamesView: View {
                                 }
 
                                 Button {
-                                    inspectionResults[game.id] =
-                                        GameFileInspector.inspect(game.fileURL)
+                                    inspectGame(game)
                                 } label: {
                                     Label(
                                         "Inspect Game File",
@@ -62,7 +63,7 @@ struct GamesView: View {
                                 .buttonStyle(.bordered)
 
                                 if let result = inspectionResults[game.id] {
-                                    VStack(alignment: .leading, spacing: 4) {
+                                    VStack(alignment: .leading, spacing: 5) {
                                         Label(
                                             result.isRecognized
                                                 ? "Header Recognized"
@@ -90,7 +91,57 @@ struct GamesView: View {
                                     .background(
                                         Color.secondary.opacity(0.10)
                                     )
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .clipShape(
+                                        RoundedRectangle(cornerRadius: 10)
+                                    )
+                                }
+
+                                if let error = archiveErrors[game.id] {
+                                    Text("Archive error: \(error)")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+
+                                if let entries = archiveResults[game.id] {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("NSP Archive Contents")
+                                            .font(.headline)
+
+                                        Text("\(entries.count) entries found")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+
+                                        ForEach(entries) { entry in
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(entry.name)
+                                                    .font(.subheadline)
+                                                    .lineLimit(2)
+
+                                                Text(
+                                                    "Size: \(ByteCountFormatter.string(
+                                                        fromByteCount: Int64(
+                                                            clamping: entry.size
+                                                        ),
+                                                        countStyle: .file
+                                                    ))"
+                                                )
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                            }
+                                            .padding(.vertical, 3)
+                                        }
+                                    }
+                                    .padding(10)
+                                    .frame(
+                                        maxWidth: .infinity,
+                                        alignment: .leading
+                                    )
+                                    .background(
+                                        Color.secondary.opacity(0.10)
+                                    )
+                                    .clipShape(
+                                        RoundedRectangle(cornerRadius: 10)
+                                    )
                                 }
                             }
                             .padding(.vertical, 6)
@@ -98,6 +149,12 @@ struct GamesView: View {
                                 Button(role: .destructive) {
                                     deleteAction(game)
                                     inspectionResults.removeValue(
+                                        forKey: game.id
+                                    )
+                                    archiveResults.removeValue(
+                                        forKey: game.id
+                                    )
+                                    archiveErrors.removeValue(
                                         forKey: game.id
                                     )
                                 } label: {
@@ -117,6 +174,25 @@ struct GamesView: View {
                     .accessibilityLabel("Import games")
                 }
             }
+        }
+    }
+
+    private func inspectGame(_ game: ImportedGame) {
+        archiveResults.removeValue(forKey: game.id)
+        archiveErrors.removeValue(forKey: game.id)
+
+        let result = GameFileInspector.inspect(game.fileURL)
+        inspectionResults[game.id] = result
+
+        guard result.format == "NSP / PFS0" else {
+            return
+        }
+
+        do {
+            let archive = try PFS0Archive.open(game.fileURL)
+            archiveResults[game.id] = archive.entries
+        } catch {
+            archiveErrors[game.id] = error.localizedDescription
         }
     }
 }
