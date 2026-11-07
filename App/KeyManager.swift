@@ -1,36 +1,41 @@
 
 import Foundation
+import Security
 
 enum KeyManager {
     enum KeyError: LocalizedError {
         case invalidFile
-        case storageFailed
+        case saveFailed
+        case notFound
+        case readFailed
 
         var errorDescription: String? {
             switch self {
             case .invalidFile:
-                return "The selected keys file is not valid text."
-            case .storageFailed:
-                return "Could not securely save the keys file."
+                return "The selected keys file is not valid UTF-8 text."
+            case .saveFailed:
+                return "Could not securely save the keys."
+            case .notFound:
+                return "No keys have been imported."
+            case .readFailed:
+                return "Could not read the saved keys."
             }
         }
     }
 
-    private static var keysDirectory: URL {
-        FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("NxNative", isDirectory: true)
-    }
-
-    private static var keysURL: URL {
-        keysDirectory.appendingPathComponent("prod.keys")
-    }
+    private static let service = "com.nxnative.mobile"
+    private static let account = "prod.keys"
 
     static var hasKeys: Bool {
-        FileManager.default.fileExists(
-            atPath: keysURL.path
-        )
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: false
+        ]
+
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     static func importKeys(from sourceURL: URL) throws {
@@ -45,48 +50,65 @@ enum KeyManager {
 
         let data = try Data(contentsOf: sourceURL)
 
-        guard let contents = String(
-            data: data,
-            encoding: .utf8
-        ), !contents.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).isEmpty else {
+        guard let text = String(data: data, encoding: .utf8),
+              !text.trimmingCharacters(
+                in: .whitespacesAndNewlines
+              ).isEmpty else {
             throw KeyError.invalidFile
         }
 
-        try FileManager.default.createDirectory(
-            at: keysDirectory,
-            withIntermediateDirectories: true
-        )
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
 
-        try data.write(
-            to: keysURL,
-            options: .atomic
-        )
+        SecItemDelete(query as CFDictionary)
 
-        try FileManager.default.setAttributes(
-            [.protectionKey: FileProtectionType.complete],
-            ofItemAtPath: keysURL.path
-        )
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] =
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-
-        var protectedURL = keysURL
-        try protectedURL.setResourceValues(values)
+        guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else {
+            throw KeyError.saveFailed
+        }
     }
 
     static func loadKeys() throws -> Data {
-        guard hasKeys else {
-            throw KeyError.storageFailed
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: CFTypeRef?
+
+        let status = SecItemCopyMatching(
+            query as CFDictionary,
+            &result
+        )
+
+        guard status == errSecSuccess,
+              let data = result as? Data else {
+            throw KeyError.notFound
         }
 
-        return try Data(contentsOf: keysURL)
+        return data
     }
 
     static func deleteKeys() throws {
-        if hasKeys {
-            try FileManager.default.removeItem(at: keysURL)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+
+        let status = SecItemDelete(query as CFDictionary)
+
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeyError.readFailed
         }
     }
 }
