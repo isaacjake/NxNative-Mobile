@@ -161,7 +161,11 @@ struct GamesView: View {
         }
     }
     private func ncaInspectionCard(_ result: NCAInspection) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        let formattedFileSize = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: result.fileSize),
+            countStyle: .file
+        )
+        return VStack(alignment: .leading, spacing: 5) {
             Label(
                 result.isRecognized ? "NCA Signature Recognized" : "NCA Not Recognized",
                 systemImage: result.isRecognized
@@ -178,13 +182,8 @@ struct GamesView: View {
                 .font(.caption)
             Text("Key generation: \(byteDescription(result.keyGeneration))")
                 .font(.caption)
-            Text(
-                "File size: \(ByteCountFormatter.string(
-                    fromByteCount: Int64(clamping: result.fileSize),
-                    countStyle: .file
-                ))"
-            )
-            .font(.caption)
+            Text("File size: \(formattedFileSize)")
+                .font(.caption)
             Text(result.message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
