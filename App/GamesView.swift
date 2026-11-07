@@ -9,20 +9,17 @@ struct GamesView: View {
     @State private var inspectionResults: [UUID: GameFileInspection] = [:]
     @State private var archiveResults: [UUID: [PFS0Entry]] = [:]
     @State private var archiveErrors: [UUID: String] = [:]
+    @State private var extractionMessages: [String: String] = [:]
+    @State private var extractingEntries: Set<String> = []
 
     var body: some View {
         NavigationStack {
             Group {
                 if games.isEmpty {
                     ContentUnavailableView {
-                        Label(
-                            "No Games Imported",
-                            systemImage: "gamecontroller"
-                        )
+                        Label("No Games Imported", systemImage: "gamecontroller")
                     } description: {
-                        Text(
-                            "Import a legally obtained NSP or XCI game file to get started."
-                        )
+                        Text("Import a legally obtained NSP or XCI game file to get started.")
                     } actions: {
                         Button(action: importAction) {
                             Text("Import Game")
@@ -42,11 +39,9 @@ struct GamesView: View {
                                         Text(game.name)
                                             .font(.headline)
 
-                                        Text(
-                                            game.fileURL.pathExtension.uppercased()
-                                        )
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        Text(game.fileURL.pathExtension.uppercased())
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
 
                                     Spacer()
@@ -55,26 +50,19 @@ struct GamesView: View {
                                 Button {
                                     inspectGame(game)
                                 } label: {
-                                    Label(
-                                        "Inspect Game File",
-                                        systemImage: "doc.text.magnifyingglass"
-                                    )
+                                    Label("Inspect Game File", systemImage: "doc.text.magnifyingglass")
                                 }
                                 .buttonStyle(.bordered)
 
                                 if let result = inspectionResults[game.id] {
                                     VStack(alignment: .leading, spacing: 5) {
                                         Label(
-                                            result.isRecognized
-                                                ? "Header Recognized"
-                                                : "Inspection Result",
+                                            result.isRecognized ? "Header Recognized" : "Inspection Result",
                                             systemImage: result.isRecognized
                                                 ? "checkmark.circle.fill"
                                                 : "exclamationmark.triangle.fill"
                                         )
-                                        .foregroundStyle(
-                                            result.isRecognized ? .green : .orange
-                                        )
+                                        .foregroundStyle(result.isRecognized ? .green : .orange)
 
                                         Text("Format: \(result.format)")
                                             .font(.caption)
@@ -84,16 +72,9 @@ struct GamesView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     .padding(10)
-                                    .frame(
-                                        maxWidth: .infinity,
-                                        alignment: .leading
-                                    )
-                                    .background(
-                                        Color.secondary.opacity(0.10)
-                                    )
-                                    .clipShape(
-                                        RoundedRectangle(cornerRadius: 10)
-                                    )
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.secondary.opacity(0.10))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
                                 }
 
                                 if let error = archiveErrors[game.id] {
@@ -112,51 +93,53 @@ struct GamesView: View {
                                             .foregroundStyle(.secondary)
 
                                         ForEach(entries) { entry in
-                                            VStack(alignment: .leading, spacing: 3) {
+                                            let extractionID = "\(game.id.uuidString)-\(entry.id)"
+
+                                            VStack(alignment: .leading, spacing: 6) {
                                                 Text(entry.name)
                                                     .font(.subheadline)
                                                     .lineLimit(2)
 
                                                 Text(
-                                                    "Size: \(ByteCountFormatter.string(
-                                                        fromByteCount: Int64(
-                                                            clamping: entry.size
-                                                        ),
+                                                    ByteCountFormatter.string(
+                                                        fromByteCount: Int64(clamping: entry.size),
                                                         countStyle: .file
-                                                    ))"
+                                                    )
                                                 )
-                                                .font(.caption2)
+                                                .font(.caption)
                                                 .foregroundStyle(.secondary)
+
+                                                Button {
+                                                    extractEntry(entry, from: game)
+                                                } label: {
+                                                    if extractingEntries.contains(extractionID) {
+                                                        ProgressView()
+                                                    } else {
+                                                        Label("Extract File", systemImage: "arrow.down.doc")
+                                                    }
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .disabled(extractingEntries.contains(extractionID))
+
+                                                if let message = extractionMessages[extractionID] {
+                                                    Text(message)
+                                                        .font(.caption)
+                                                        .foregroundStyle(message.hasPrefix("Saved") ? .green : .orange)
+                                                }
                                             }
-                                            .padding(.vertical, 3)
+                                            .padding(.vertical, 6)
                                         }
                                     }
                                     .padding(10)
-                                    .frame(
-                                        maxWidth: .infinity,
-                                        alignment: .leading
-                                    )
-                                    .background(
-                                        Color.secondary.opacity(0.10)
-                                    )
-                                    .clipShape(
-                                        RoundedRectangle(cornerRadius: 10)
-                                    )
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.secondary.opacity(0.10))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
                                 }
                             }
                             .padding(.vertical, 6)
                             .swipeActions {
                                 Button(role: .destructive) {
-                                    deleteAction(game)
-                                    inspectionResults.removeValue(
-                                        forKey: game.id
-                                    )
-                                    archiveResults.removeValue(
-                                        forKey: game.id
-                                    )
-                                    archiveErrors.removeValue(
-                                        forKey: game.id
-                                    )
+                                    deleteGame(game)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -193,6 +176,63 @@ struct GamesView: View {
             archiveResults[game.id] = archive.entries
         } catch {
             archiveErrors[game.id] = error.localizedDescription
+        }
+    }
+
+    private func extractEntry(_ entry: PFS0Entry, from game: ImportedGame) {
+        let extractionID = "\(game.id.uuidString)-\(entry.id)"
+
+        guard !extractingEntries.contains(extractionID) else {
+            return
+        }
+
+        extractingEntries.insert(extractionID)
+        extractionMessages.removeValue(forKey: extractionID)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let archive = try PFS0Archive.open(game.fileURL)
+
+                let documents = FileManager.default.urls(
+                    for: .documentDirectory,
+                    in: .userDomainMask
+                )[0]
+
+                let outputFolder = documents
+                    .appendingPathComponent("NxNativeExtracted", isDirectory: true)
+                    .appendingPathComponent(game.id.uuidString, isDirectory: true)
+
+                let savedURL = try archive.extract(
+                    entry,
+                    to: outputFolder
+                )
+
+                DispatchQueue.main.async {
+                    extractionMessages[extractionID] =
+                        "Saved: \(savedURL.lastPathComponent)"
+                    extractingEntries.remove(extractionID)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    extractionMessages[extractionID] =
+                        "Extraction failed: \(error.localizedDescription)"
+                    extractingEntries.remove(extractionID)
+                }
+            }
+        }
+    }
+
+    private func deleteGame(_ game: ImportedGame) {
+        deleteAction(game)
+
+        inspectionResults.removeValue(forKey: game.id)
+        archiveResults.removeValue(forKey: game.id)
+        archiveErrors.removeValue(forKey: game.id)
+
+        let prefix = "\(game.id.uuidString)-"
+
+        extractionMessages = extractionMessages.filter {
+            !$0.key.hasPrefix(prefix)
         }
     }
 }
