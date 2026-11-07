@@ -1,15 +1,20 @@
+
 import SwiftUI
 
 struct GamesView: View {
     let games: [ImportedGame]
     let importAction: () -> Void
+    let deleteAction: (ImportedGame) -> Void
 
     var body: some View {
         NavigationStack {
             Group {
                 if games.isEmpty {
                     ContentUnavailableView {
-                        Label("No Games Imported", systemImage: "gamecontroller")
+                        Label(
+                            "No Games Imported",
+                            systemImage: "gamecontroller"
+                        )
                     } description: {
                         Text("Import a legally obtained NSP or XCI game file to get started.")
                     } actions: {
@@ -41,6 +46,13 @@ struct GamesView: View {
                                     .foregroundStyle(.green)
                             }
                             .padding(.vertical, 5)
+                            .swipeActions {
+                                Button(role: .destructive) {
+                                    deleteAction(game)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
