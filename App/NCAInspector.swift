@@ -1,3 +1,4 @@
+
 import Foundation
 import CommonCrypto
 
@@ -8,7 +9,6 @@ struct NCASectionInfo {
     let offsetBytes: UInt64
     let sizeBytes: UInt64
     let isValid: Bool
-
     let fsType: UInt8
     let hashType: UInt8
     let encryptionType: UInt8
@@ -17,16 +17,21 @@ struct NCASectionInfo {
 struct NCAInspection {
     let isRecognized: Bool
     let magic: String
+    let distributionType: UInt8?
     let contentType: UInt8?
-    let cryptoType: UInt8?
+    let keyGenerationOld: UInt8?
+    let keyAreaEncryptionKeyIndex: UInt8?
     let keyGeneration: UInt8?
     let fileSize: UInt64
     let message: String
     let sections: [NCASectionInfo]
+
+    // Temporary compatibility with the existing GamesView.
+    // The old "Crypto type" display will show Unavailable until we update it.
+    var cryptoType: UInt8? { nil }
 }
 
 enum NCAInspector {
-
     private static let sectionTableOffset = 0x240
     private static let sectionEntrySize = 0x10
     private static let fsHeaderOffset = 0x400
@@ -38,13 +43,11 @@ enum NCAInspector {
             let attributes = try FileManager.default.attributesOfItem(
                 atPath: url.path
             )
-
             let fileSize =
                 (attributes[.size] as? NSNumber)?.uint64Value ?? 0
 
             guard fileSize >= 0xC00 else {
-                return result(
-                    false, "Unknown", nil, nil, nil,
+                return failure(
                     fileSize,
                     "File is too small for a complete NCA header."
                 )
@@ -55,18 +58,15 @@ enum NCAInspector {
 
             guard let encryptedData = try handle.read(upToCount: 0xC00),
                   encryptedData.count == 0xC00 else {
-                return result(
-                    false, "Unknown", nil, nil, nil,
+                return failure(
                     fileSize,
                     "Could not read the complete NCA header."
                 )
             }
 
             let headerKey = try KeyManager.loadHeaderKey()
-
             guard headerKey.count == 32 else {
-                return result(
-                    false, "Unknown", nil, nil, nil,
+                return failure(
                     fileSize,
                     "The NCA header key must be 32 bytes."
                 )
@@ -75,6 +75,7 @@ enum NCAInspector {
             var header = Array(encryptedData)
             let key = Array(headerKey)
 
+            // Decrypt the 0x400-byte main header.
             for sector in 0...1 {
                 try NCAHeaderXTS.decryptSector(
                     &header,
@@ -83,26 +84,33 @@ enum NCAInspector {
                 )
             }
 
-            let firstMagic = magicString(header, at: 0x200)
+            let magic = magicString(header, at: 0x200)
 
-            guard firstMagic == "NCA3" ||
-                  firstMagic == "NCA2" ||
-                  firstMagic == "NCA0" else {
-                return result(
-                    false, "Unknown", nil, nil, nil,
+            guard magic == "NCA3" ||
+                  magic == "NCA2" ||
+                  magic == "NCA0" else {
+                return failure(
                     fileSize,
                     "No supported NCA signature found after header decryption. Check the key and file."
                 )
             }
 
-            guard firstMagic == "NCA3" else {
-                return result(
-                    false, firstMagic, nil, nil, nil,
-                    fileSize,
-                    "An older NCA format was detected. Additional format handling is needed."
+            guard magic == "NCA3" else {
+                return NCAInspection(
+                    isRecognized: true,
+                    magic: magic,
+                    distributionType: nil,
+                    contentType: nil,
+                    keyGenerationOld: nil,
+                    keyAreaEncryptionKeyIndex: nil,
+                    keyGeneration: nil,
+                    fileSize: fileSize,
+                    message: "Older NCA format detected. Additional format handling is needed.",
+                    sections: []
                 )
             }
 
+            // NCA3 section headers occupy AES-XTS sectors 2 through 5.
             for sector in 2...5 {
                 try NCAHeaderXTS.decryptSector(
                     &header,
@@ -118,22 +126,19 @@ enum NCAInspector {
 
             return NCAInspection(
                 isRecognized: true,
-                magic: firstMagic,
+                magic: magic,
+                distributionType: header[0x204],
                 contentType: header[0x205],
-                cryptoType: header[0x206],
-                keyGeneration: header[0x207],
+                keyGenerationOld: header[0x206],
+                keyAreaEncryptionKeyIndex: header[0x207],
+                keyGeneration: header[0x220],
                 fileSize: fileSize,
-                message: "NCA3 header decrypted. Section ranges and filesystem headers inspected.",
+                message: "NCA3 header decrypted. Header fields and section ranges inspected; section contents are not decrypted.",
                 sections: sections
             )
 
         } catch {
-            return result(
-                false,
-                "Error",
-                nil,
-                nil,
-                nil,
+            return failure(
                 0,
                 error.localizedDescription
             )
@@ -144,12 +149,11 @@ enum NCAInspector {
         header: [UInt8],
         fileSize: UInt64
     ) -> [NCASectionInfo] {
-
         var sections: [NCASectionInfo] = []
 
         for index in 0..<4 {
-            let tableOffset = sectionTableOffset +
-                index * sectionEntrySize
+            let tableOffset =
+                sectionTableOffset + index * sectionEntrySize
 
             let start = readUInt32(header, at: tableOffset)
             let end = readUInt32(header, at: tableOffset + 4)
@@ -165,12 +169,8 @@ enum NCAInspector {
                 ? endOffset - offset
                 : 0
 
-            let fsOffset = fsHeaderOffset +
-                index * fsHeaderSize
-
-            let fsType = readUInt8(header, at: fsOffset + 0x02)
-            let hashType = readUInt8(header, at: fsOffset + 0x03)
-            let encryptionType = readUInt8(header, at: fsOffset + 0x04)
+            let fsOffset =
+                fsHeaderOffset + index * fsHeaderSize
 
             sections.append(
                 NCASectionInfo(
@@ -180,9 +180,9 @@ enum NCAInspector {
                     offsetBytes: offset,
                     sizeBytes: size,
                     isValid: valid,
-                    fsType: fsType,
-                    hashType: hashType,
-                    encryptionType: encryptionType
+                    fsType: readUInt8(header, at: fsOffset + 0x02),
+                    hashType: readUInt8(header, at: fsOffset + 0x03),
+                    encryptionType: readUInt8(header, at: fsOffset + 0x04)
                 )
             )
         }
@@ -197,7 +197,6 @@ enum NCAInspector {
         guard offset >= 0 && offset < bytes.count else {
             return 0
         }
-
         return bytes[offset]
     }
 
@@ -205,16 +204,14 @@ enum NCAInspector {
         _ bytes: [UInt8],
         at offset: Int
     ) -> UInt32 {
-        guard offset + 4 <= bytes.count else {
+        guard offset >= 0 && offset + 4 <= bytes.count else {
             return 0
         }
 
         var value: UInt32 = 0
-
         for index in 0..<4 {
             value |= UInt32(bytes[offset + index]) << (index * 8)
         }
-
         return value
     }
 
@@ -222,7 +219,7 @@ enum NCAInspector {
         _ bytes: [UInt8],
         at offset: Int
     ) -> String {
-        guard offset + 4 <= bytes.count else {
+        guard offset >= 0 && offset + 4 <= bytes.count else {
             return "Unknown"
         }
 
@@ -232,21 +229,18 @@ enum NCAInspector {
         ) ?? "Unknown"
     }
 
-    private static func result(
-        _ recognized: Bool,
-        _ magic: String,
-        _ contentType: UInt8?,
-        _ cryptoType: UInt8?,
-        _ keyGeneration: UInt8?,
+    private static func failure(
         _ fileSize: UInt64,
         _ message: String
     ) -> NCAInspection {
         NCAInspection(
-            isRecognized: recognized,
-            magic: magic,
-            contentType: contentType,
-            cryptoType: cryptoType,
-            keyGeneration: keyGeneration,
+            isRecognized: false,
+            magic: "Unknown",
+            distributionType: nil,
+            contentType: nil,
+            keyGenerationOld: nil,
+            keyAreaEncryptionKeyIndex: nil,
+            keyGeneration: nil,
             fileSize: fileSize,
             message: message,
             sections: []
@@ -255,13 +249,11 @@ enum NCAInspector {
 }
 
 private enum NCAHeaderXTS {
-
     static func decryptSector(
         _ data: inout [UInt8],
         key: [UInt8],
         sectorIndex: UInt64
     ) throws {
-
         let sectorSize = 0x200
         let sectorOffset = Int(sectorIndex) * sectorSize
 
@@ -274,7 +266,6 @@ private enum NCAHeaderXTS {
         let tweakKey = Array(key[16..<32])
 
         var tweakInput = [UInt8](repeating: 0, count: 16)
-
         for index in 0..<8 {
             tweakInput[15 - index] =
                 UInt8((sectorIndex >> (index * 8)) & 0xFF)
@@ -292,7 +283,6 @@ private enum NCAHeaderXTS {
             by: 16
         ) {
             let absoluteOffset = sectorOffset + blockOffset
-
             var block = [UInt8](repeating: 0, count: 16)
 
             for index in 0..<16 {
@@ -320,9 +310,7 @@ private enum NCAHeaderXTS {
         key: [UInt8],
         operation: CCOperation
     ) throws -> [UInt8] {
-
-        guard input.count == 16,
-              key.count == 16 else {
+        guard input.count == 16, key.count == 16 else {
             throw XTSFailure.invalidInput
         }
 
@@ -350,8 +338,7 @@ private enum NCAHeaderXTS {
             }
         }
 
-        guard status == kCCSuccess,
-              moved == 16 else {
+        guard status == kCCSuccess, moved == 16 else {
             throw XTSFailure.cryptographicOperationFailed
         }
 
