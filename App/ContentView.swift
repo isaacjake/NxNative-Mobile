@@ -20,9 +20,17 @@ struct ContentView: View {
             .tag(0)
 
             GamesView(
-                games: importedGames,
-                importAction: { showingImporter = true }
-            )
+    games: importedGames,
+    importAction: { showingImporter = true },
+    deleteAction: { game in
+        importedGames.removeAll { $0.id == game.id }
+        ImportedGame.save(importedGames)
+
+        try? FileManager.default.removeItem(
+            at: game.fileURL
+        )
+    }
+)
             .tabItem {
                 Label("Games", systemImage: "gamecontroller.fill")
             }
