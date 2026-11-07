@@ -15,27 +15,36 @@ enum PFS0Error: LocalizedError {
     case invalidFilename
     case truncatedArchive
     case invalidOffset
+    case unsafeFilename
+    case outputCreationFailed
 
     var errorDescription: String? {
         switch self {
         case .invalidHeader:
-            return "This file does not contain a valid PFS0 header."
+            return "Invalid PFS0 header."
         case .invalidEntryCount:
-            return "The archive contains an invalid number of entries."
+            return "Invalid number of archive entries."
         case .invalidStringTable:
-            return "The archive string table is invalid."
+            return "Invalid archive string table."
         case .invalidFilename:
-            return "An archive entry has an invalid filename."
+            return "Invalid archive filename."
         case .truncatedArchive:
             return "The archive is incomplete or truncated."
         case .invalidOffset:
-            return "An archive entry points outside the archive."
+            return "An entry points outside the archive."
+        case .unsafeFilename:
+            return "The entry has an unsafe filename."
+        case .outputCreationFailed:
+            return "Could not create the extracted file."
         }
     }
 }
 
 struct PFS0Archive {
     let entries: [PFS0Entry]
+
+    private let archiveURL: URL
+    private let dataOffset: UInt64
 
     static func open(_ url: URL) throws -> PFS0Archive {
         let handle = try FileHandle(forReadingFrom: url)
@@ -50,7 +59,6 @@ struct PFS0Archive {
         }
 
         try handle.seek(toOffset: 0)
-
         let header = try readExactly(handle, count: 16)
 
         guard header.prefix(4) == Data("PFS0".utf8) else {
@@ -69,14 +77,14 @@ struct PFS0Archive {
             throw PFS0Error.invalidStringTable
         }
 
-        let entryTableSize = count.multipliedReportingOverflow(by: 0x18)
+        let tableSize = count.multipliedReportingOverflow(by: 0x18)
 
-        guard !entryTableSize.overflow else {
+        guard !tableSize.overflow else {
             throw PFS0Error.invalidEntryCount
         }
 
         let metadataSize = UInt64(16)
-            + UInt64(entryTableSize.partialValue)
+            + UInt64(tableSize.partialValue)
             + UInt64(stringTableSize)
 
         guard metadataSize <= fileSize else {
@@ -85,7 +93,7 @@ struct PFS0Archive {
 
         let rawEntries = try readExactly(
             handle,
-            count: entryTableSize.partialValue
+            count: tableSize.partialValue
         )
 
         let stringTable = try readExactly(
@@ -104,8 +112,7 @@ struct PFS0Archive {
                 readUInt32(rawEntries, at: base + 16)
             )
 
-            guard nameOffset >= 0,
-                  nameOffset < stringTable.count else {
+            guard nameOffset < stringTable.count else {
                 throw PFS0Error.invalidFilename
             }
 
@@ -114,9 +121,8 @@ struct PFS0Archive {
                 throw PFS0Error.invalidOffset
             }
 
-            let nameBytes = stringTable[nameOffset...]
-
-            guard let terminator = nameBytes.firstIndex(of: 0) else {
+            guard let terminator = stringTable[nameOffset...]
+                .firstIndex(of: 0) else {
                 throw PFS0Error.invalidFilename
             }
 
@@ -141,22 +147,103 @@ struct PFS0Archive {
             )
         }
 
-        return PFS0Archive(entries: results)
+        return PFS0Archive(
+            entries: results,
+            archiveURL: url,
+            dataOffset: metadataSize
+        )
+    }
+
+    func extract(
+        _ entry: PFS0Entry,
+        to directory: URL
+    ) throws -> URL {
+        guard entries.contains(where: {
+            $0.id == entry.id &&
+            $0.offset == entry.offset &&
+            $0.size == entry.size
+        }) else {
+            throw PFS0Error.invalidOffset
+        }
+
+        let safeName = URL(
+            fileURLWithPath: entry.name
+                .replacingOccurrences(of: "\\", with: "_")
+        ).lastPathComponent
+
+        guard !safeName.isEmpty,
+              safeName != ".",
+              safeName != ".." else {
+            throw PFS0Error.unsafeFilename
+        }
+
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+
+        let destination = directory.appendingPathComponent(
+            "\(entry.id)-\(safeName)"
+        )
+
+        guard FileManager.default.createFile(
+            atPath: destination.path,
+            contents: nil
+        ) else {
+            throw PFS0Error.outputCreationFailed
+        }
+
+        do {
+            let input = try FileHandle(forReadingFrom: archiveURL)
+            let output = try FileHandle(forWritingTo: destination)
+
+            defer {
+                try? input.close()
+                try? output.close()
+            }
+
+            let start = dataOffset.addingReportingOverflow(entry.offset)
+
+            guard !start.overflow else {
+                throw PFS0Error.invalidOffset
+            }
+
+            try input.seek(toOffset: start.partialValue)
+
+            var remaining = entry.size
+            let bufferSize: UInt64 = 1024 * 1024
+
+            while remaining > 0 {
+                let amount = Int(min(remaining, bufferSize))
+
+                let chunk = try input.read(upToCount: amount) ?? Data()
+
+                guard !chunk.isEmpty else {
+                    throw PFS0Error.truncatedArchive
+                }
+
+                try output.write(contentsOf: chunk)
+                remaining -= UInt64(chunk.count)
+            }
+
+            return destination
+
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
     }
 
     private static func readExactly(
         _ handle: FileHandle,
         count: Int
     ) throws -> Data {
-        guard count >= 0 else {
-            throw PFS0Error.truncatedArchive
-        }
-
         var result = Data()
 
         while result.count < count {
-            let remaining = count - result.count
-            let chunk = try handle.read(upToCount: remaining) ?? Data()
+            let chunk = try handle.read(
+                upToCount: count - result.count
+            ) ?? Data()
 
             guard !chunk.isEmpty else {
                 throw PFS0Error.truncatedArchive
