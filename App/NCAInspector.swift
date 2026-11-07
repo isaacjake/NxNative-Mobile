@@ -8,10 +8,7 @@ struct NCASectionInfo {
     let endMediaUnit: UInt32
     let offsetBytes: UInt64
     let sizeBytes: UInt64
-
-    var isPresent: Bool {
-        startMediaUnit != 0 || endMediaUnit != 0
-    }
+    let isValid: Bool
 }
 
 struct NCAInspection {
@@ -121,7 +118,7 @@ enum NCAInspector {
                 cryptoType: header[0x206],
                 keyGeneration: header[0x207],
                 fileSize: fileSize,
-                message: "NCA3 header successfully decrypted and recognized. Section table inspected.",
+                message: "NCA3 header successfully decrypted. Raw section table values inspected.",
                 sections: sections
             )
 
@@ -152,28 +149,16 @@ enum NCAInspector {
             let start = readUInt32(header, at: base)
             let end = readUInt32(header, at: base + 4)
 
-            let startBytes =
-                UInt64(start).multipliedReportingOverflow(
-                    by: mediaUnitSize
-                )
+            let offset = UInt64(start) * mediaUnitSize
+            let endOffset = UInt64(end) * mediaUnitSize
 
-            let endBytes =
-                UInt64(end).multipliedReportingOverflow(
-                    by: mediaUnitSize
-                )
+            let valid =
+                end > start &&
+                endOffset <= fileSize
 
-            guard !startBytes.overflow,
-                  !endBytes.overflow else {
-                continue
-            }
-
-            let offset = startBytes.partialValue
-            let endOffset = endBytes.partialValue
-
-            guard endOffset >= offset,
-                  endOffset <= fileSize else {
-                continue
-            }
+            let size = end >= start
+                ? endOffset - offset
+                : 0
 
             sections.append(
                 NCASectionInfo(
@@ -181,7 +166,8 @@ enum NCAInspector {
                     startMediaUnit: start,
                     endMediaUnit: end,
                     offsetBytes: offset,
-                    sizeBytes: endOffset - offset
+                    sizeBytes: size,
+                    isValid: valid
                 )
             )
         }
@@ -279,7 +265,6 @@ private enum NCAHeaderXTS {
             to: sectorSize,
             by: 16
         ) {
-
             let absoluteOffset = sectorOffset + blockOffset
 
             var block = [UInt8](repeating: 0, count: 16)
@@ -315,15 +300,7 @@ private enum NCAHeaderXTS {
             throw XTSFailure.invalidInput
         }
 
-        let inputCount = input.count
-        let keyCount = key.count
-        let outputCount = 16
-
-        var output = [UInt8](
-            repeating: 0,
-            count: outputCount
-        )
-
+        var output = [UInt8](repeating: 0, count: 16)
         var moved: size_t = 0
 
         let status = key.withUnsafeBytes { keyBuffer in
@@ -334,12 +311,12 @@ private enum NCAHeaderXTS {
                         CCAlgorithm(kCCAlgorithmAES),
                         CCOptions(kCCOptionECBMode),
                         keyBuffer.baseAddress,
-                        keyCount,
+                        key.count,
                         nil,
                         inputBuffer.baseAddress,
-                        inputCount,
+                        input.count,
                         outputBuffer.baseAddress,
-                        outputCount,
+                        output.count,
                         &moved
                     )
                 }
@@ -347,7 +324,7 @@ private enum NCAHeaderXTS {
         }
 
         guard status == kCCSuccess,
-              moved == outputCount else {
+              moved == 16 else {
             throw XTSFailure.cryptographicOperationFailed
         }
 
