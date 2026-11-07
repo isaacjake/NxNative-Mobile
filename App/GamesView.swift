@@ -212,7 +212,7 @@ struct GamesView: View {
             countStyle: .file
         )
 
-        return VStack(alignment: .leading, spacing: 5) {
+        return VStack(alignment: .leading, spacing: 8) {
             Label(
                 result.isRecognized
                     ? "NCA Signature Recognized"
@@ -242,6 +242,54 @@ struct GamesView: View {
             Text(result.message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text("NCA Section Table")
+                .font(.headline)
+
+            if result.sections.isEmpty {
+                Text("No section entries were returned by the inspector.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                ForEach(result.sections, id: \.index) { section in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Section \(section.index + 1)")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+
+                            Spacer()
+
+                            Text(section.isValid ? "Valid range" : "Check range")
+                                .font(.caption)
+                                .foregroundStyle(
+                                    section.isValid ? .green : .orange
+                                )
+                        }
+
+                        Text("Start media unit: \(section.startMediaUnit)")
+                            .font(.caption)
+
+                        Text("End media unit: \(section.endMediaUnit)")
+                            .font(.caption)
+
+                        Text("Offset: \(section.offsetBytes) bytes")
+                            .font(.caption)
+
+                        Text("Size: \(ByteCountFormatter.string(
+                            fromByteCount: Int64(clamping: section.sizeBytes),
+                            countStyle: .file
+                        ))")
+                        .font(.caption)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
