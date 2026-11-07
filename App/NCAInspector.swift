@@ -22,12 +22,12 @@ struct NCAInspection {
     let keyGenerationOld: UInt8?
     let keyAreaEncryptionKeyIndex: UInt8?
     let keyGeneration: UInt8?
+    let rightsIDPresent: Bool?
     let fileSize: UInt64
     let message: String
     let sections: [NCASectionInfo]
 
-    // Temporary compatibility with the existing GamesView.
-    // The old "Crypto type" display will show Unavailable until we update it.
+    // Compatibility with older GamesView code.
     var cryptoType: UInt8? { nil }
 }
 
@@ -65,6 +65,7 @@ enum NCAInspector {
             }
 
             let headerKey = try KeyManager.loadHeaderKey()
+
             guard headerKey.count == 32 else {
                 return failure(
                     fileSize,
@@ -75,7 +76,6 @@ enum NCAInspector {
             var header = Array(encryptedData)
             let key = Array(headerKey)
 
-            // Decrypt the 0x400-byte main header.
             for sector in 0...1 {
                 try NCAHeaderXTS.decryptSector(
                     &header,
@@ -104,13 +104,13 @@ enum NCAInspector {
                     keyGenerationOld: nil,
                     keyAreaEncryptionKeyIndex: nil,
                     keyGeneration: nil,
+                    rightsIDPresent: nil,
                     fileSize: fileSize,
                     message: "Older NCA format detected. Additional format handling is needed.",
                     sections: []
                 )
             }
 
-            // NCA3 section headers occupy AES-XTS sectors 2 through 5.
             for sector in 2...5 {
                 try NCAHeaderXTS.decryptSector(
                     &header,
@@ -124,6 +124,8 @@ enum NCAInspector {
                 fileSize: fileSize
             )
 
+            let rightsIDPresent = hasRightsID(header)
+
             return NCAInspection(
                 isRecognized: true,
                 magic: magic,
@@ -132,8 +134,9 @@ enum NCAInspector {
                 keyGenerationOld: header[0x206],
                 keyAreaEncryptionKeyIndex: header[0x207],
                 keyGeneration: header[0x220],
+                rightsIDPresent: rightsIDPresent,
                 fileSize: fileSize,
-                message: "NCA3 header decrypted. Header fields and section ranges inspected; section contents are not decrypted.",
+                message: "NCA3 header decrypted. Header fields, Rights ID presence, and section ranges inspected. Section contents are not decrypted.",
                 sections: sections
             )
 
@@ -142,6 +145,21 @@ enum NCAInspector {
                 0,
                 error.localizedDescription
             )
+        }
+    }
+
+    private static func hasRightsID(
+        _ header: [UInt8]
+    ) -> Bool {
+        let start = 0x230
+        let end = start + 16
+
+        guard header.count >= end else {
+            return false
+        }
+
+        return header[start..<end].contains {
+            $0 != 0
         }
     }
 
@@ -197,6 +215,7 @@ enum NCAInspector {
         guard offset >= 0 && offset < bytes.count else {
             return 0
         }
+
         return bytes[offset]
     }
 
@@ -209,9 +228,11 @@ enum NCAInspector {
         }
 
         var value: UInt32 = 0
+
         for index in 0..<4 {
             value |= UInt32(bytes[offset + index]) << (index * 8)
         }
+
         return value
     }
 
@@ -241,6 +262,7 @@ enum NCAInspector {
             keyGenerationOld: nil,
             keyAreaEncryptionKeyIndex: nil,
             keyGeneration: nil,
+            rightsIDPresent: nil,
             fileSize: fileSize,
             message: message,
             sections: []
@@ -266,6 +288,7 @@ private enum NCAHeaderXTS {
         let tweakKey = Array(key[16..<32])
 
         var tweakInput = [UInt8](repeating: 0, count: 16)
+
         for index in 0..<8 {
             tweakInput[15 - index] =
                 UInt8((sectorIndex >> (index * 8)) & 0xFF)
