@@ -301,6 +301,7 @@ private enum NCAHeaderXTS {
         }
 
         var output = [UInt8](repeating: 0, count: 16)
+        let outputCount = output.count
         var moved: size_t = 0
 
         let status = key.withUnsafeBytes { keyBuffer in
@@ -316,7 +317,7 @@ private enum NCAHeaderXTS {
                         inputBuffer.baseAddress,
                         input.count,
                         outputBuffer.baseAddress,
-                        output.count,
+                        outputCount,
                         &moved
                     )
                 }
