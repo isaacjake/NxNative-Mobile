@@ -1,46 +1,129 @@
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BuildView: View {
+    @State private var showingKeysPicker = false
+    @State private var hasKeys = KeyManager.hasKeys
+    @State private var statusMessage = ""
+    @State private var showingError = false
+
     var body: some View {
         NavigationStack {
             List {
-                Section("NxNative Engine") {
-                    Label("Engine not connected", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
+                Section("Game Keys") {
+                    HStack {
+                        Label(
+                            hasKeys ? "Keys imported" : "No keys imported",
+                            systemImage: hasKeys
+                                ? "checkmark.circle.fill"
+                                : "key"
+                        )
+                        Spacer()
+                        Text(hasKeys ? "Ready" : "Required")
+                            .foregroundStyle(
+                                hasKeys ? .green : .orange
+                            )
+                    }
 
-                    Text("The NxNative compiler has not yet been integrated into this app.")
+                    Button {
+                        showingKeysPicker = true
+                    } label: {
+                        Label(
+                            "Import prod.keys",
+                            systemImage: "folder"
+                        )
+                    }
+
+                    if hasKeys {
+                        Button("Remove saved keys", role: .destructive) {
+                            do {
+                                try KeyManager.deleteKeys()
+                                hasKeys = false
+                                statusMessage = "Saved keys removed."
+                            } catch {
+                                statusMessage = error.localizedDescription
+                                showingError = true
+                            }
+                        }
+                    }
+
+                    Text("Your keys are stored in this app's iOS Keychain. They are not uploaded to GitHub.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Official Build Requirements") {
-                    requirement("macOS 26.6 or later")
-                    requirement("Xcode 27.2")
-                    requirement("Python 3.12 or later")
-                    requirement("Your own game files and keys")
+                Section("NxNative Engine") {
+                    Label(
+                        "Engine not connected",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+
+                    Text("The game compiler has not yet been integrated.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
-                Section("iPhone Runtime Requirements") {
-                    requirement("iOS 26 or later")
-                    requirement("iPhone 15 Pro or newer")
+                Section("iPhone Runtime") {
+                    Label("iOS 26 or later", systemImage: "checkmark.circle")
+                    Label("iPhone 15 Pro or newer", systemImage: "checkmark.circle")
                 }
 
-                Section("Our Development Goal") {
-                    Text("Build a workflow that runs entirely on the iPhone, without a Mac, Xcode, or hosted build runners.")
+                Section("Development Goal") {
+                    Text("Develop an on-device game compilation workflow without a Mac, Xcode, or hosted runners.")
                         .font(.footnote)
 
-                    Text("This capability is not implemented yet. We need to develop and test an alternative to the official Mac-based build pipeline.")
+                    Text("This capability is still under development. Importing keys does not yet decrypt or compile games.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Build")
-        }
-    }
+            .onAppear {
+                hasKeys = KeyManager.hasKeys
+            }
+            .fileImporter(
+                isPresented: $showingKeysPicker,
+                allowedContentTypes: [.data, .plainText],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
 
-    private func requirement(_ title: String) -> some View {
-        Label(title, systemImage: "checkmark.circle")
-            .font(.subheadline)
+                    do {
+                        try KeyManager.importKeys(from: url)
+                        hasKeys = KeyManager.hasKeys
+                        statusMessage = "Keys saved securely on this iPhone."
+                    } catch {
+                        statusMessage = error.localizedDescription
+                        showingError = true
+                    }
+
+                case .failure(let error):
+                    statusMessage = error.localizedDescription
+                    showingError = true
+                }
+            }
+            .alert("Keys Import", isPresented: $showingError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(statusMessage)
+            }
+            .alert(
+                "Import Status",
+                isPresented: Binding(
+                    get: { !statusMessage.isEmpty && !showingError },
+                    set: { if !$0 { statusMessage = "" } }
+                )
+            ) {
+                Button("OK", role: .cancel) {
+                    statusMessage = ""
+                }
+            } message: {
+                Text(statusMessage)
+            }
+        }
     }
 }
