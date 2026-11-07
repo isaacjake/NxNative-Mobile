@@ -1,4 +1,3 @@
-
 import SwiftUI
 
 struct GamesView: View {
@@ -53,26 +52,17 @@ struct GamesView: View {
                                 Button {
                                     inspectGame(game)
                                 } label: {
-                                    Label(
-                                        "Inspect Game File",
-                                        systemImage: "doc.text.magnifyingglass"
-                                    )
+                                    Label("Inspect Game File", systemImage: "doc.text.magnifyingglass")
                                 }
                                 .buttonStyle(.bordered)
 
                                 if let result = inspectionResults[game.id] {
                                     VStack(alignment: .leading, spacing: 5) {
                                         Label(
-                                            result.isRecognized
-                                                ? "Header Recognized"
-                                                : "Inspection Result",
-                                            systemImage: result.isRecognized
-                                                ? "checkmark.circle.fill"
-                                                : "exclamationmark.triangle.fill"
+                                            result.isRecognized ? "Header Recognized" : "Inspection Result",
+                                            systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                                         )
-                                        .foregroundStyle(
-                                            result.isRecognized ? .green : .orange
-                                        )
+                                        .foregroundStyle(result.isRecognized ? .green : .orange)
 
                                         Text("Format: \(result.format)")
                                             .font(.caption)
@@ -103,8 +93,7 @@ struct GamesView: View {
                                             .foregroundStyle(.secondary)
 
                                         ForEach(entries) { entry in
-                                            let extractionID =
-                                                "\(game.id.uuidString)-\(entry.id)"
+                                            let extractionID = "\(game.id.uuidString)-\(entry.id)"
 
                                             VStack(alignment: .leading, spacing: 6) {
                                                 Text(entry.name)
@@ -230,16 +219,16 @@ struct GamesView: View {
 
             Divider()
 
-            Text("NCA Section Table")
+            Text("NCA Section Table & Filesystem Headers")
                 .font(.headline)
 
             if result.sections.isEmpty {
-                Text("No section entries were returned by the inspector.")
+                Text("No section entries were returned.")
                     .font(.caption)
                     .foregroundStyle(.orange)
             } else {
                 ForEach(result.sections, id: \.index) { section in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         HStack {
                             Text("Section \(section.index + 1)")
                                 .font(.subheadline)
@@ -247,7 +236,7 @@ struct GamesView: View {
 
                             Spacer()
 
-                            Text(section.isValid ? "Valid range" : "Check range")
+                            Text(section.isValid ? "Valid range" : "Empty / Check range")
                                 .font(.caption)
                                 .foregroundStyle(section.isValid ? .green : .orange)
                         }
@@ -268,6 +257,17 @@ struct GamesView: View {
 
                         Text("Size: \(sectionSize)")
                             .font(.caption)
+
+                        Divider()
+
+                        Text("Filesystem type: \(hex(section.fsType)) — \(filesystemName(section.fsType))")
+                            .font(.caption)
+
+                        Text("Hash type: \(hex(section.hashType)) — \(hashName(section.hashType))")
+                            .font(.caption)
+
+                        Text("Encryption type: \(hex(section.encryptionType)) — \(encryptionName(section.encryptionType))")
+                            .font(.caption)
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -287,7 +287,56 @@ struct GamesView: View {
             return "Unavailable"
         }
 
-        return String(format: "0x%02X", value)
+        return hex(value)
+    }
+
+    private func hex(_ value: UInt8) -> String {
+        String(format: "0x%02X", value)
+    }
+
+    private func filesystemName(_ value: UInt8) -> String {
+        switch value {
+        case 0:
+            return "None / Unknown"
+        case 1:
+            return "RomFS"
+        case 2:
+            return "PartitionFS"
+        default:
+            return "Unrecognized"
+        }
+    }
+
+    private func hashName(_ value: UInt8) -> String {
+        switch value {
+        case 0:
+            return "None"
+        case 1:
+            return "Hierarchical SHA-256"
+        case 2:
+            return "Hierarchical Integrity"
+        case 3:
+            return "Auto-generated"
+        default:
+            return "Unrecognized"
+        }
+    }
+
+    private func encryptionName(_ value: UInt8) -> String {
+        switch value {
+        case 0:
+            return "None"
+        case 1:
+            return "AES-XTS"
+        case 2:
+            return "AES-CTR"
+        case 3:
+            return "AES-CTR with skip-layer hash"
+        case 4:
+            return "AES-CTR with auto-layer hash"
+        default:
+            return "Unrecognized"
+        }
     }
 
     private func inspectGame(_ game: ImportedGame) {
