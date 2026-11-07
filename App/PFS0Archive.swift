@@ -1,4 +1,3 @@
-
 import Foundation
 
 struct PFS0Entry: Identifiable {
@@ -41,13 +40,16 @@ enum PFS0Error: LocalizedError {
 }
 
 struct PFS0Archive {
+
     let entries: [PFS0Entry]
 
     private let archiveURL: URL
     private let dataOffset: UInt64
 
     static func open(_ url: URL) throws -> PFS0Archive {
+
         let handle = try FileHandle(forReadingFrom: url)
+
         defer {
             try? handle.close()
         }
@@ -59,6 +61,7 @@ struct PFS0Archive {
         }
 
         try handle.seek(toOffset: 0)
+
         let header = try readExactly(handle, count: 16)
 
         guard header.prefix(4) == Data("PFS0".utf8) else {
@@ -77,7 +80,9 @@ struct PFS0Archive {
             throw PFS0Error.invalidStringTable
         }
 
-        let tableSize = count.multipliedReportingOverflow(by: 0x18)
+        let tableSize = count.multipliedReportingOverflow(
+            by: 0x18
+        )
 
         guard !tableSize.overflow else {
             throw PFS0Error.invalidEntryCount
@@ -104,10 +109,12 @@ struct PFS0Archive {
         var results: [PFS0Entry] = []
 
         for index in 0..<count {
+
             let base = index * 0x18
 
             let offset = readUInt64(rawEntries, at: base)
             let size = readUInt64(rawEntries, at: base + 8)
+
             let nameOffset = Int(
                 readUInt32(rawEntries, at: base + 16)
             )
@@ -158,6 +165,7 @@ struct PFS0Archive {
         _ entry: PFS0Entry,
         to directory: URL
     ) throws -> URL {
+
         guard entries.contains(where: {
             $0.id == entry.id &&
             $0.offset == entry.offset &&
@@ -186,6 +194,14 @@ struct PFS0Archive {
             "\(entry.id)-\(safeName)"
         )
 
+        if FileManager.default.fileExists(
+            atPath: destination.path
+        ) {
+            try FileManager.default.removeItem(
+                at: destination
+            )
+        }
+
         guard FileManager.default.createFile(
             atPath: destination.path,
             contents: nil
@@ -194,42 +210,67 @@ struct PFS0Archive {
         }
 
         do {
-            let input = try FileHandle(forReadingFrom: archiveURL)
-            let output = try FileHandle(forWritingTo: destination)
+
+            let input = try FileHandle(
+                forReadingFrom: archiveURL
+            )
+
+            let output = try FileHandle(
+                forWritingTo: destination
+            )
 
             defer {
                 try? input.close()
                 try? output.close()
             }
 
-            let start = dataOffset.addingReportingOverflow(entry.offset)
+            let start = dataOffset.addingReportingOverflow(
+                entry.offset
+            )
 
             guard !start.overflow else {
                 throw PFS0Error.invalidOffset
             }
 
-            try input.seek(toOffset: start.partialValue)
+            try input.seek(
+                toOffset: start.partialValue
+            )
 
             var remaining = entry.size
-            let bufferSize: UInt64 = 1024 * 1024
+
+            // Keep memory usage low for very large files.
+            let bufferSize = 256 * 1024
 
             while remaining > 0 {
-                let amount = Int(min(remaining, bufferSize))
 
-                let chunk = try input.read(upToCount: amount) ?? Data()
+                let amount = Int(
+                    min(
+                        remaining,
+                        UInt64(bufferSize)
+                    )
+                )
 
-                guard !chunk.isEmpty else {
+                guard let chunk = try input.read(
+                    upToCount: amount
+                ), !chunk.isEmpty else {
                     throw PFS0Error.truncatedArchive
                 }
 
                 try output.write(contentsOf: chunk)
+
                 remaining -= UInt64(chunk.count)
             }
+
+            try output.synchronize()
 
             return destination
 
         } catch {
-            try? FileManager.default.removeItem(at: destination)
+
+            try? FileManager.default.removeItem(
+                at: destination
+            )
+
             throw error
         }
     }
@@ -238,9 +279,11 @@ struct PFS0Archive {
         _ handle: FileHandle,
         count: Int
     ) throws -> Data {
+
         var result = Data()
 
         while result.count < count {
+
             let chunk = try handle.read(
                 upToCount: count - result.count
             ) ?? Data()
@@ -259,10 +302,12 @@ struct PFS0Archive {
         _ data: Data,
         at offset: Int
     ) -> UInt32 {
+
         var value: UInt32 = 0
 
         for index in 0..<4 {
-            value |= UInt32(data[offset + index]) << (index * 8)
+            value |= UInt32(data[offset + index])
+                << (index * 8)
         }
 
         return value
@@ -272,10 +317,12 @@ struct PFS0Archive {
         _ data: Data,
         at offset: Int
     ) -> UInt64 {
+
         var value: UInt64 = 0
 
         for index in 0..<8 {
-            value |= UInt64(data[offset + index]) << (index * 8)
+            value |= UInt64(data[offset + index])
+                << (index * 8)
         }
 
         return value
