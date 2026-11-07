@@ -1,9 +1,10 @@
+
 name: NxNativeMobile
 
 options:
   bundleIdPrefix: com.nxnative
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
 
 targets:
   NxNativeMobile:
@@ -20,4 +21,4 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: NxNative
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
