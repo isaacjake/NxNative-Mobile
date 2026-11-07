@@ -1,11 +1,8 @@
-
 name: NxNativeMobile
-
 options:
   bundleIdPrefix: com.nxnative
   deploymentTarget:
     iOS: "26.0"
-
 targets:
   NxNativeMobile:
     type: application
@@ -22,3 +19,4 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: NxNative
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
