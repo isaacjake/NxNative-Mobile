@@ -1,3 +1,4 @@
+
 import SwiftUI
 
 struct GamesView: View {
@@ -12,6 +13,8 @@ struct GamesView: View {
     @State private var extractingEntries: Set<String> = []
     @State private var ncaResults: [String: NCAInspection] = [:]
     @State private var ticketResults: [String: TicketInspection] = [:]
+    @State private var cnmtResults: [String: CNMTInspection] = [:]
+    @State private var cnmtMessages: [String: String] = [:]
     @State private var extractionProgress: [String: Double] = [:]
     @State private var extractionBytes: [String: UInt64] = [:]
 
@@ -155,6 +158,14 @@ struct GamesView: View {
                                                 if let result = ncaResults[extractionID] {
                                                     ncaInspectionCard(result)
                                                 }
+
+                                                if let result = cnmtResults[extractionID] {
+                                                    cnmtInspectionCard(result)
+                                                }
+
+                                                if let message = cnmtMessages[extractionID] {
+                                                    metadataMessageCard(message)
+                                                }
                                             }
                                             .padding(.vertical, 6)
                                         }
@@ -187,6 +198,69 @@ struct GamesView: View {
                 }
             }
         }
+    }
+
+    private func metadataMessageCard(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("CNMT Metadata Status", systemImage: "info.circle")
+                .font(.subheadline)
+                .foregroundStyle(.orange)
+
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func cnmtInspectionCard(_ result: CNMTInspection) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(
+                result.isRecognized ? "CNMT Header Recognized" : "CNMT Inspection",
+                systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .font(.subheadline)
+            .foregroundStyle(result.isRecognized ? .green : .orange)
+
+            Text("File size: \(result.fileSize) bytes")
+                .font(.caption)
+
+            if let titleID = result.titleID {
+                Text("Title ID: \(titleID)")
+                    .font(.caption)
+            }
+
+            if let version = result.version {
+                Text("Version: \(version)")
+                    .font(.caption)
+            }
+
+            if let contentType = result.contentType {
+                Text("Content meta type: \(String(format: "0x%02X", contentType))")
+                    .font(.caption)
+            }
+
+            if let contentCount = result.contentCount {
+                Text("Content entries: \(contentCount)")
+                    .font(.caption)
+            }
+
+            if let contentMetaCount = result.contentMetaCount {
+                Text("Content meta entries: \(contentMetaCount)")
+                    .font(.caption)
+            }
+
+            Text(result.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func ticketInspectionCard(_ result: TicketInspection) -> some View {
@@ -436,6 +510,8 @@ struct GamesView: View {
         extractionMessages.removeValue(forKey: extractionID)
         ncaResults.removeValue(forKey: extractionID)
         ticketResults.removeValue(forKey: extractionID)
+        cnmtResults.removeValue(forKey: extractionID)
+        cnmtMessages.removeValue(forKey: extractionID)
 
         DispatchQueue.global(qos: .utility).async {
             do {
@@ -461,14 +537,26 @@ struct GamesView: View {
                     }
                 }
 
+                let fileExtension = savedURL.pathExtension.lowercased()
+
                 let ncaResult: NCAInspection? =
-                    savedURL.pathExtension.lowercased() == "nca"
+                    fileExtension == "nca"
                     ? NCAInspector.inspect(savedURL)
                     : nil
 
                 let ticketResult: TicketInspection? =
-                    savedURL.pathExtension.lowercased() == "tik"
+                    fileExtension == "tik"
                     ? TicketInspector.inspect(savedURL)
+                    : nil
+
+                let cnmtResult: CNMTInspection? =
+                    fileExtension == "cnmt"
+                    ? CNMTInspector.inspect(savedURL)
+                    : nil
+
+                let cnmtMessage: String? =
+                    entry.name.lowercased().hasSuffix(".cnmt.nca")
+                    ? "This is a Meta NCA container. The current CNMT inspector reads plaintext .cnmt files only; it does not decrypt or inspect the contents of this NCA."
                     : nil
 
                 DispatchQueue.main.async {
@@ -481,6 +569,14 @@ struct GamesView: View {
 
                     if let ticketResult {
                         ticketResults[extractionID] = ticketResult
+                    }
+
+                    if let cnmtResult {
+                        cnmtResults[extractionID] = cnmtResult
+                    }
+
+                    if let cnmtMessage {
+                        cnmtMessages[extractionID] = cnmtMessage
                     }
 
                     extractionProgress[extractionID] = 1
@@ -515,6 +611,14 @@ struct GamesView: View {
         }
 
         ticketResults = ticketResults.filter {
+            !$0.key.hasPrefix(prefix)
+        }
+
+        cnmtResults = cnmtResults.filter {
+            !$0.key.hasPrefix(prefix)
+        }
+
+        cnmtMessages = cnmtMessages.filter {
             !$0.key.hasPrefix(prefix)
         }
 
