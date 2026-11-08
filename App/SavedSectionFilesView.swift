@@ -2,10 +2,10 @@
 import SwiftUI
 import QuickLook
 import UIKit
+import Foundation
 
 private enum SavedFileFilter: String, CaseIterable, Identifiable {
     case all, images, videos, documents
-
     var id: String { rawValue }
 
     var title: String {
@@ -30,7 +30,6 @@ private enum SavedFileFilter: String, CaseIterable, Identifiable {
 
 private enum SavedFileSort: String, CaseIterable, Identifiable {
     case nameAscending, nameDescending, newest, largest
-
     var id: String { rawValue }
 
     var title: String {
@@ -57,6 +56,9 @@ struct SavedSectionFilesView: View {
     @State private var selectedFileIDs: Set<String> = []
     @State private var isBulkDeleteConfirmationPresented = false
     @State private var isBulkSharePresented = false
+    @State private var isCreatingZip = false
+    @State private var zipURL: URL?
+    @State private var isZipSharePresented = false
 
     private let supportedExtensions: Set<String> = [
         "png", "gif", "jpg", "jpeg", "heic",
@@ -111,11 +113,7 @@ struct SavedSectionFilesView: View {
                 }
             }
 
-            return SavedFileGroup(
-                id: group.id,
-                gameName: group.gameName,
-                files: sorted
-            )
+            return SavedFileGroup(id: group.id, gameName: group.gameName, files: sorted)
         }
     }
 
@@ -158,12 +156,10 @@ struct SavedSectionFilesView: View {
                                 Button("Select All") {
                                     selectAllVisibleFiles()
                                 }
-                                .font(.subheadline)
 
                                 Button("Clear") {
                                     selectedFileIDs.removeAll()
                                 }
-                                .font(.subheadline)
                                 .disabled(selectedFileIDs.isEmpty)
                             }
                             .padding(.horizontal)
@@ -214,6 +210,18 @@ struct SavedSectionFilesView: View {
                         }
                         .accessibilityLabel("Share selected files")
 
+                        Button {
+                            createZip()
+                        } label: {
+                            if isCreatingZip {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "archivebox")
+                            }
+                        }
+                        .disabled(isCreatingZip)
+                        .accessibilityLabel("Create ZIP archive")
+
                         Button(role: .destructive) {
                             isBulkDeleteConfirmationPresented = true
                         } label: {
@@ -245,6 +253,11 @@ struct SavedSectionFilesView: View {
             .sheet(isPresented: $isBulkSharePresented) {
                 MultiFileShareSheet(urls: selectedFiles.map { $0.url })
             }
+            .sheet(isPresented: $isZipSharePresented) {
+                if let zipURL {
+                    MultiFileShareSheet(urls: [zipURL])
+                }
+            }
             .confirmationDialog(
                 "Delete Saved File?",
                 isPresented: Binding(
@@ -270,7 +283,6 @@ struct SavedSectionFilesView: View {
                 Button("Delete \(selectedFileIDs.count) Files", role: .destructive) {
                     deleteSelectedFiles()
                 }
-
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Only the selected saved copies will be deleted. Original NSP and XCI files will not be affected.")
@@ -291,7 +303,6 @@ struct SavedSectionFilesView: View {
 
     private func toggleSelectionMode() {
         isSelectionMode.toggle()
-
         if !isSelectionMode {
             selectedFileIDs.removeAll()
         }
@@ -310,6 +321,35 @@ struct SavedSectionFilesView: View {
             selectedFileIDs.remove(file.id)
         } else {
             selectedFileIDs.insert(file.id)
+        }
+    }
+
+    private func createZip() {
+        let files = selectedFiles
+        guard !files.isEmpty else { return }
+
+        isCreatingZip = true
+
+        do {
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent("NxNative-Selected-Files-\(UUID().uuidString).zip")
+
+            let entries = files.map { file -> ZIPArchiveWriter.Entry in
+                let game = groups.first(where: { $0.files.contains(where: { $0.id == file.id }) })?.gameName ?? "Files"
+                let safeGameName = game.replacingOccurrences(of: "/", with: "-")
+                return ZIPArchiveWriter.Entry(
+                    fileURL: file.url,
+                    archivePath: "\(safeGameName)/\(file.url.lastPathComponent)"
+                )
+            }
+
+            try ZIPArchiveWriter.createArchive(entries: entries, at: destination)
+            zipURL = destination
+            isCreatingZip = false
+            isZipSharePresented = true
+        } catch {
+            isCreatingZip = false
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -395,9 +435,7 @@ struct SavedSectionFilesView: View {
             HStack {
                 Text("Storage by Game")
                     .font(.headline)
-
                 Spacer()
-
                 Text("\(groups.count) games")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -448,7 +486,6 @@ struct SavedSectionFilesView: View {
                 .foregroundStyle(.secondary)
 
             Text(title)
-
             Text("(\(count))")
                 .foregroundStyle(.secondary)
 
@@ -483,9 +520,7 @@ struct SavedSectionFilesView: View {
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.15))
-
+                    Capsule().fill(Color.secondary.opacity(0.15))
                     Capsule()
                         .fill(Color.accentColor)
                         .frame(width: geometry.size.width * percentage)
@@ -504,10 +539,7 @@ struct SavedSectionFilesView: View {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
-    private func fileRow(
-        _ file: SavedSectionFile,
-        gameName: String
-    ) -> some View {
+    private func fileRow(_ file: SavedSectionFile, gameName: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             if isSelectionMode {
                 Button {
@@ -527,11 +559,6 @@ struct SavedSectionFilesView: View {
                     .frame(width: 28, height: 76)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(
-                    selectedFileIDs.contains(file.id)
-                        ? "Deselect file"
-                        : "Select file"
-                )
             }
 
             SavedFileThumbnail(url: file.url)
@@ -567,7 +594,6 @@ struct SavedSectionFilesView: View {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Share file")
 
                     Button(role: .destructive) {
                         pendingDelete = file
@@ -575,7 +601,6 @@ struct SavedSectionFilesView: View {
                         Image(systemName: "trash")
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Delete saved file")
                 }
             }
         }
@@ -633,11 +658,7 @@ struct SavedSectionFilesView: View {
                     let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
                     let date = (attributes?[.creationDate] as? Date) ?? .distantPast
 
-                    return SavedSectionFile(
-                        url: url,
-                        sizeBytes: size,
-                        creationDate: date
-                    )
+                    return SavedSectionFile(url: url, sizeBytes: size, creationDate: date)
                 }
 
                 if !savedFiles.isEmpty {
@@ -696,6 +717,212 @@ struct SavedSectionFilesView: View {
         if !failures.isEmpty {
             errorMessage = failures.joined(separator: "\n")
         }
+    }
+}
+
+// MARK: - ZIP archive writer
+
+private enum ZIPArchiveWriter {
+    struct Entry {
+        let fileURL: URL
+        let archivePath: String
+    }
+
+    private struct CentralRecord {
+        let name: Data
+        let crc: UInt32
+        let size: UInt32
+        let offset: UInt32
+    }
+
+    static func createArchive(entries: [Entry], at destination: URL) throws {
+        guard !entries.isEmpty else {
+            throw ZIPError.noFiles
+        }
+
+        guard entries.count <= Int(UInt16.max) else {
+            throw ZIPError.tooManyFiles
+        }
+
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+
+        let output = try FileHandle(forWritingTo: destination)
+        defer { try? output.close() }
+
+        var records: [CentralRecord] = []
+
+        for entry in entries {
+            let name = Data(entry.archivePath.utf8)
+
+            guard name.count <= Int(UInt16.max) else {
+                throw ZIPError.invalidFileName
+            }
+
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: entry.fileURL.path
+            )
+
+            let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+
+            guard fileSize <= UInt64(UInt32.max) else {
+                throw ZIPError.fileTooLarge(entry.fileURL.lastPathComponent)
+            }
+
+            let crc = try calculateCRC32(for: entry.fileURL)
+            let size = UInt32(fileSize)
+            let currentOffset = output.offsetInFile
+
+            guard currentOffset <= UInt64(UInt32.max) else {
+                throw ZIPError.archiveTooLarge
+            }
+
+            let offset = UInt32(currentOffset)
+
+            var header = Data()
+            header.appendLE(UInt32(0x04034b50))
+            header.appendLE(UInt16(20))
+            header.appendLE(UInt16(0x0800))
+            header.appendLE(UInt16(0))
+            header.appendLE(UInt16(0))
+            header.appendLE(UInt16(0))
+            header.appendLE(crc)
+            header.appendLE(size)
+            header.appendLE(size)
+            header.appendLE(UInt16(name.count))
+            header.appendLE(UInt16(0))
+            header.append(name)
+
+            try output.write(contentsOf: header)
+            try copyFile(entry.fileURL, to: output)
+
+            records.append(
+                CentralRecord(name: name, crc: crc, size: size, offset: offset)
+            )
+        }
+
+        let centralOffsetValue = output.offsetInFile
+
+        guard centralOffsetValue <= UInt64(UInt32.max) else {
+            throw ZIPError.archiveTooLarge
+        }
+
+        var centralDirectory = Data()
+
+        for record in records {
+            centralDirectory.appendLE(UInt32(0x02014b50))
+            centralDirectory.appendLE(UInt16(20))
+            centralDirectory.appendLE(UInt16(20))
+            centralDirectory.appendLE(UInt16(0x0800))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(record.crc)
+            centralDirectory.appendLE(record.size)
+            centralDirectory.appendLE(record.size)
+            centralDirectory.appendLE(UInt16(record.name.count))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(UInt16(0))
+            centralDirectory.appendLE(UInt32(0))
+            centralDirectory.appendLE(record.offset)
+            centralDirectory.append(record.name)
+        }
+
+        try output.write(contentsOf: centralDirectory)
+
+        let centralSizeValue = UInt64(centralDirectory.count)
+
+        guard centralSizeValue <= UInt64(UInt32.max) else {
+            throw ZIPError.archiveTooLarge
+        }
+
+        var end = Data()
+        end.appendLE(UInt32(0x06054b50))
+        end.appendLE(UInt16(0))
+        end.appendLE(UInt16(0))
+        end.appendLE(UInt16(records.count))
+        end.appendLE(UInt16(records.count))
+        end.appendLE(UInt32(centralSizeValue))
+        end.appendLE(UInt32(centralOffsetValue))
+        end.appendLE(UInt16(0))
+
+        try output.write(contentsOf: end)
+        try output.synchronize()
+    }
+
+    private static func calculateCRC32(for url: URL) throws -> UInt32 {
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+
+        var crc: UInt32 = 0xffffffff
+
+        while true {
+            let chunk = try input.read(upToCount: 64 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+
+            for byte in chunk {
+                crc ^= UInt32(byte)
+
+                for _ in 0..<8 {
+                    if (crc & 1) != 0 {
+                        crc = (crc >> 1) ^ 0xedb88320
+                    } else {
+                        crc >>= 1
+                    }
+                }
+            }
+        }
+
+        return crc ^ 0xffffffff
+    }
+
+    private static func copyFile(_ source: URL, to output: FileHandle) throws {
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+
+        while true {
+            let chunk = try input.read(upToCount: 64 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            try output.write(contentsOf: chunk)
+        }
+    }
+
+    private enum ZIPError: LocalizedError {
+        case noFiles
+        case tooManyFiles
+        case invalidFileName
+        case archiveTooLarge
+        case fileTooLarge(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noFiles:
+                return "Select at least one file before creating a ZIP."
+            case .tooManyFiles:
+                return "The ZIP archive contains too many files."
+            case .invalidFileName:
+                return "A file name is too long for this ZIP format."
+            case .archiveTooLarge:
+                return "The archive exceeds the supported ZIP size."
+            case .fileTooLarge(let name):
+                return "\(name) exceeds the supported 4 GB per-file ZIP limit."
+            }
+        }
+    }
+}
+
+private extension Data {
+    mutating func appendLE(_ value: UInt16) {
+        append(UInt8(value & 0xff))
+        append(UInt8((value >> 8) & 0xff))
+    }
+
+    mutating func appendLE(_ value: UInt32) {
+        append(UInt8(value & 0xff))
+        append(UInt8((value >> 8) & 0xff))
+        append(UInt8((value >> 16) & 0xff))
+        append(UInt8((value >> 24) & 0xff))
     }
 }
 
