@@ -232,6 +232,8 @@ struct BuildView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .contentMargins(.bottom, 96, for: .scrollContent)
+            .contentMargins(.bottom, 96, for: .scrollIndicators)
             .navigationTitle("Build")
             .onAppear {
                 games = ImportedGame.loadSaved()
