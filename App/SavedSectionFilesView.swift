@@ -56,6 +56,7 @@ struct SavedSectionFilesView: View {
     @State private var isSelectionMode = false
     @State private var selectedFileIDs: Set<String> = []
     @State private var isBulkDeleteConfirmationPresented = false
+    @State private var isBulkSharePresented = false
 
     private let supportedExtensions: Set<String> = [
         "png", "gif", "jpg", "jpeg", "heic",
@@ -206,6 +207,13 @@ struct SavedSectionFilesView: View {
                     }
 
                     if isSelectionMode && !selectedFileIDs.isEmpty {
+                        Button {
+                            isBulkSharePresented = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share selected files")
+
                         Button(role: .destructive) {
                             isBulkDeleteConfirmationPresented = true
                         } label: {
@@ -233,6 +241,9 @@ struct SavedSectionFilesView: View {
                 NavigationStack {
                     FileDetailsView(url: item.url, gameName: item.gameName)
                 }
+            }
+            .sheet(isPresented: $isBulkSharePresented) {
+                MultiFileShareSheet(urls: selectedFiles.map { $0.url })
             }
             .confirmationDialog(
                 "Delete Saved File?",
@@ -686,6 +697,22 @@ struct SavedSectionFilesView: View {
             errorMessage = failures.joined(separator: "\n")
         }
     }
+}
+
+private struct MultiFileShareSheet: UIViewControllerRepresentable {
+    let urls: [URL]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(
+            activityItems: urls.map { $0 as Any },
+            applicationActivities: nil
+        )
+    }
+
+    func updateUIViewController(
+        _ controller: UIActivityViewController,
+        context: Context
+    ) {}
 }
 
 private struct FileDetailsView: View {
