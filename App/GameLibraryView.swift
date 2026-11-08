@@ -1,3 +1,4 @@
+
 import SwiftUI
 
 private struct LibraryMetadata: Codable {
@@ -51,10 +52,18 @@ struct GameLibraryView: View {
 
     @State private var scanning: Set<UUID> = []
     @State private var searchText = ""
-    @State private var selectedKind: GameContentKind?
+    @State private var selectedFilter = "All"
 
     private static let metadataStorageKey =
         "Xerenge.LibraryMetadata.v1"
+
+    private let filters = [
+        "All",
+        "Base Games",
+        "Updates",
+        "DLC",
+        "Unclassified"
+    ]
 
     private let sections: [(kind: GameContentKind, title: String)] = [
         (.baseGame, "Base Games"),
@@ -93,132 +102,117 @@ struct GameLibraryView: View {
             List {
                 relationshipSummarySection
 
+                searchFilterSection
+
                 relationshipsSection
 
                 ForEach(sections, id: \.kind) { section in
-                    if selectedKind == nil ||
-                        selectedKind == section.kind {
+                    let indices = filteredIndices(for: section.kind)
 
-                        Section(section.title) {
-                            let indices = filteredIndices(
-                                for: section.kind
-                            )
-
-                            if indices.isEmpty {
-                                Text("No items")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(indices, id: \.self) { index in
-                                    gameRow(at: index)
-                                }
+                    Section(section.title) {
+                        if indices.isEmpty {
+                            Text("No matching items")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(indices, id: \.self) { index in
+                                gameRow(at: index)
                             }
                         }
                     }
                 }
-
-                if !games.isEmpty && filteredGameCount == 0 {
-                    Section {
-                        ContentUnavailableView(
-                            "No Matching Games",
-                            systemImage: "magnifyingglass",
-                            description: Text(
-                                "Try another search or change the content filter."
-                            )
-                        )
-                    }
-                }
-            }
-            .searchable(
-                text: $searchText,
-                prompt: "Search games or filenames"
-            )
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            selectedKind = nil
-                        } label: {
-                            filterLabel("All Content", kind: nil)
-                        }
-
-                        Button {
-                            selectedKind = .baseGame
-                        } label: {
-                            filterLabel("Base Games", kind: .baseGame)
-                        }
-
-                        Button {
-                            selectedKind = .update
-                        } label: {
-                            filterLabel("Updates", kind: .update)
-                        }
-
-                        Button {
-                            selectedKind = .downloadableContent
-                        } label: {
-                            filterLabel("DLC", kind: .downloadableContent)
-                        }
-
-                        Button {
-                            selectedKind = .unknown
-                        } label: {
-                            filterLabel("Unclassified", kind: .unknown)
-                        }
-                    } label: {
-                        Label(
-                            "Filter",
-                            systemImage: "line.3.horizontal.decrease.circle"
-                        )
-                    }
-                }
             }
             .navigationTitle("Library")
+            .searchable(
+                text: $searchText,
+                prompt: "Search games, files, or types"
+            )
         }
     }
 
-    // MARK: - Search and Filtering
+    // MARK: - Search and Filters
+
+    private var searchFilterSection: some View {
+        Section("Library Filters") {
+            Picker("Show", selection: $selectedFilter) {
+                ForEach(filters, id: \.self) { filter in
+                    Text(filter).tag(filter)
+                }
+            }
+            .pickerStyle(.menu)
+
+            HStack {
+                Text("Showing")
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Text("\(filteredGameCount) of \(games.count)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            if !searchText.isEmpty || selectedFilter != "All" {
+                Button {
+                    searchText = ""
+                    selectedFilter = "All"
+                } label: {
+                    Label(
+                        "Clear Search and Filters",
+                        systemImage: "xmark.circle"
+                    )
+                }
+            }
+        }
+    }
 
     private var filteredGameCount: Int {
-        games.filter { matchesSearch($0) && matchesSelectedKind($0) }.count
-    }
-
-    private func matchesSearch(_ game: ImportedGame) -> Bool {
-        let query = searchText.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-
-        guard !query.isEmpty else { return true }
-
-        return game.name.localizedCaseInsensitiveContains(query) ||
-            game.fileName.localizedCaseInsensitiveContains(query) ||
-            game.fileURL.lastPathComponent.localizedCaseInsensitiveContains(query)
-    }
-
-    private func matchesSelectedKind(_ game: ImportedGame) -> Bool {
-        guard let selectedKind else { return true }
-        return game.effectiveContentKind == selectedKind
+        games.filter { game in
+            matchesFilter(game) && matchesSearch(game)
+        }.count
     }
 
     private func filteredIndices(
         for kind: GameContentKind
     ) -> [Int] {
         games.indices.filter { index in
-            games[index].effectiveContentKind == kind &&
-            matchesSearch(games[index]) &&
-            matchesSelectedKind(games[index])
+            let game = games[index]
+
+            return game.effectiveContentKind == kind &&
+                matchesFilter(game) &&
+                matchesSearch(game)
         }
     }
 
-    @ViewBuilder
-    private func filterLabel(
-        _ title: String,
-        kind: GameContentKind?
-    ) -> some View {
-        if selectedKind == kind {
-            Label(title, systemImage: "checkmark")
-        } else {
-            Text(title)
+    private func matchesFilter(_ game: ImportedGame) -> Bool {
+        switch selectedFilter {
+        case "Base Games":
+            return game.effectiveContentKind == .baseGame
+        case "Updates":
+            return game.effectiveContentKind == .update
+        case "DLC":
+            return game.effectiveContentKind == .downloadableContent
+        case "Unclassified":
+            return game.effectiveContentKind == .unknown
+        default:
+            return true
         }
+    }
+
+    private func matchesSearch(_ game: ImportedGame) -> Bool {
+        guard !searchText.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty else {
+            return true
+        }
+
+        let query = searchText.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        return game.name.localizedCaseInsensitiveContains(query) ||
+            game.fileName.localizedCaseInsensitiveContains(query) ||
+            game.effectiveContentKind.displayName
+                .localizedCaseInsensitiveContains(query)
     }
 
     // MARK: - Library Summary
@@ -249,11 +243,35 @@ struct GameLibraryView: View {
         }.count
 
         return Section("Library Summary") {
-            summaryRow("Base Games", count: baseCount, icon: "gamecontroller.fill")
-            summaryRow("Linked Updates", count: linkedUpdates, icon: "arrow.up.circle")
-            summaryRow("Linked DLC", count: linkedDLC, icon: "puzzlepiece")
-            summaryRow("Unlinked Updates", count: unlinkedUpdates, icon: "link")
-            summaryRow("Unlinked DLC", count: unlinkedDLC, icon: "link")
+            summaryRow(
+                "Base Games",
+                count: baseCount,
+                icon: "gamecontroller.fill"
+            )
+
+            summaryRow(
+                "Linked Updates",
+                count: linkedUpdates,
+                icon: "arrow.up.circle"
+            )
+
+            summaryRow(
+                "Linked DLC",
+                count: linkedDLC,
+                icon: "puzzlepiece"
+            )
+
+            summaryRow(
+                "Unlinked Updates",
+                count: unlinkedUpdates,
+                icon: "link"
+            )
+
+            summaryRow(
+                "Unlinked DLC",
+                count: unlinkedDLC,
+                icon: "link"
+            )
         }
     }
 
@@ -264,7 +282,9 @@ struct GameLibraryView: View {
     ) -> some View {
         HStack {
             Label(title, systemImage: icon)
+
             Spacer()
+
             Text("\(count)")
                 .font(.headline.monospacedDigit())
         }
@@ -471,9 +491,20 @@ struct GameLibraryView: View {
                     String(result.contentCount)
                 )
 
-                metadataLine("NCA files found", String(result.ncaCount))
-                metadataLine("Plaintext CNMT files", String(result.plaintextCNMTCount))
-                metadataLine("Encrypted CNMT containers", String(result.encryptedCNMTCount))
+                metadataLine(
+                    "NCA files found",
+                    String(result.ncaCount)
+                )
+
+                metadataLine(
+                    "Plaintext CNMT files",
+                    String(result.plaintextCNMTCount)
+                )
+
+                metadataLine(
+                    "Encrypted CNMT containers",
+                    String(result.encryptedCNMTCount)
+                )
 
                 Divider()
 
@@ -518,7 +549,10 @@ struct GameLibraryView: View {
                 if scanning.contains(game.id) {
                     Label("Scanning Metadata...", systemImage: "hourglass")
                 } else {
-                    Label("Scan Game Metadata", systemImage: "doc.text.magnifyingglass")
+                    Label(
+                        "Scan Game Metadata",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
                 }
             }
             .buttonStyle(.bordered)
