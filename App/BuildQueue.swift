@@ -311,8 +311,9 @@ struct BuildQueueView: View {
     @State private var showingProjectPicker = false
     @State private var errorMessage: String?
 
-    init(controller: BuildQueueController = BuildQueueController()) {
-        _queue = StateObject(wrappedValue: controller)
+@MainActor
+    init(controller: BuildQueueController? = nil) {
+        _queue = StateObject(wrappedValue: controller ?? BuildQueueController())
     }
 
     var body: some View {
