@@ -1,4 +1,3 @@
-
 import SwiftUI
 import QuickLook
 import UIKit
@@ -182,6 +181,8 @@ struct SavedSectionFilesView: View {
                                     }
                                 }
                             }
+                            .contentMargins(.bottom, 96, for: .scrollContent)
+                            .contentMargins(.bottom, 96, for: .scrollIndicators)
                         }
                     }
                 }
@@ -456,7 +457,7 @@ struct SavedSectionFilesView: View {
                 Text("Storage by Game")
                     .font(.headline)
                 Spacer()
-                Text("\(groups.count) games")
+                Text(groups.count == 1 ? "1 game" : "\(groups.count) games")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -560,6 +561,7 @@ struct SavedSectionFilesView: View {
     }
 
     private func fileRow(_ file: SavedSectionFile, gameName: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
         HStack(alignment: .top, spacing: 12) {
             if isSelectionMode {
                 Button {
@@ -594,37 +596,69 @@ struct SavedSectionFilesView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-                HStack {
-                    Button {
-                        previewItem = PreviewItem(url: file.url)
-                    } label: {
-                        Label("Preview", systemImage: "eye")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button {
-                        detailItem = FileDetailItem(url: file.url, gameName: gameName)
-                    } label: {
-                        Label("Details", systemImage: "info.circle")
-                    }
-                    .buttonStyle(.bordered)
-
-                    ShareLink(item: file.url) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button(role: .destructive) {
-                        pendingDelete = file
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                }
             }
         }
+
+        fileActions(file, gameName: gameName)
+        }
         .padding(.vertical, 6)
+    }
+
+    private func fileActions(_ file: SavedSectionFile, gameName: String) -> some View {
+        ViewThatFits(in: .horizontal) {
+            actionButtons(file, gameName: gameName, showsLabels: true)
+            actionButtons(file, gameName: gameName, showsLabels: false)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private func actionButtons(
+        _ file: SavedSectionFile,
+        gameName: String,
+        showsLabels: Bool
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                previewItem = PreviewItem(url: file.url)
+            } label: {
+                if showsLabels {
+                    Label("Preview", systemImage: "eye")
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                } else {
+                    Image(systemName: "eye")
+                }
+            }
+            .accessibilityLabel("Preview")
+
+            Button {
+                detailItem = FileDetailItem(url: file.url, gameName: gameName)
+            } label: {
+                if showsLabels {
+                    Label("Details", systemImage: "info.circle")
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                } else {
+                    Image(systemName: "info.circle")
+                }
+            }
+            .accessibilityLabel("Details")
+
+            Spacer(minLength: 0)
+
+            ShareLink(item: file.url) {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel("Share")
+
+            Button(role: .destructive) {
+                pendingDelete = file
+            } label: {
+                Image(systemName: "trash")
+            }
+            .accessibilityLabel("Delete")
+        }
     }
 
     private func loadFiles() {
@@ -1042,7 +1076,8 @@ private struct SavedFileThumbnail: View {
             if let image = UIImage(contentsOfFile: url.path) {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .padding(4)
             } else {
                 Image(systemName: symbol)
                     .resizable()
