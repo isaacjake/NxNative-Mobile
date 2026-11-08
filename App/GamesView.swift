@@ -1,4 +1,3 @@
-
 import SwiftUI
 
 struct GamesView: View {
@@ -395,6 +394,10 @@ struct GamesView: View {
 
                         Text("Encryption type: \(hex(section.encryptionType)) — \(encryptionName(section.encryptionType))")
                             .font(.caption)
+
+                        Text("Content status: \(section.contentStatus)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
