@@ -122,7 +122,7 @@ enum NCAInspector {
                 rightsIDPresent: rightsIDPresent,
                 titleKeyStatus: titleKeyStatus,
                 fileSize: fileSize,
-                message: "NCA3 header decrypted. Header fields, Rights ID presence, and section ranges inspected. Section contents are not decrypted.",
+                message: "NCA3 header decrypted. Title-key check: \(titleKeyStatus). Section contents are not decrypted.",
                 sections: sections
             )
         } catch {
