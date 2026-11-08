@@ -3,16 +3,70 @@ import SwiftUI
 import QuickLook
 import UIKit
 
+private enum SavedFileFilter: String, CaseIterable, Identifiable {
+    case all
+    case images
+    case videos
+    case documents
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .images: return "Images"
+        case .videos: return "Videos"
+        case .documents: return "Documents"
+        }
+    }
+
+    func matches(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+
+        switch self {
+        case .all:
+            return true
+        case .images:
+            return ["png", "gif", "jpg", "jpeg", "heic"].contains(ext)
+        case .videos:
+            return ["mp4", "mov", "m4v"].contains(ext)
+        case .documents:
+            return ["pdf", "txt", "json", "xml"].contains(ext)
+        }
+    }
+}
+
 struct SavedSectionFilesView: View {
     @State private var groups: [SavedFileGroup] = []
+    @State private var selectedFilter: SavedFileFilter = .all
     @State private var previewItem: PreviewItem?
     @State private var detailItem: FileDetailItem?
     @State private var pendingDelete: SavedSectionFile?
     @State private var errorMessage: String?
 
     private let supportedExtensions: Set<String> = [
-        "png", "gif", "jpg", "jpeg", "txt", "json", "xml", "pdf"
+        "png", "gif", "jpg", "jpeg", "heic",
+        "mp4", "mov", "m4v",
+        "txt", "json", "xml", "pdf"
     ]
+
+    private var filteredGroups: [SavedFileGroup] {
+        groups.compactMap { group in
+            let files = group.files.filter {
+                selectedFilter.matches($0.url)
+            }
+
+            guard !files.isEmpty else {
+                return nil
+            }
+
+            return SavedFileGroup(
+                id: group.id,
+                gameName: group.gameName,
+                files: files
+            )
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -26,60 +80,102 @@ struct SavedSectionFilesView: View {
                         )
                     )
                 } else {
-                    List {
-                        ForEach(groups) { group in
-                            Section(group.gameName) {
-                                ForEach(group.files) { file in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        SavedFileThumbnail(url: file.url)
+                    VStack(spacing: 0) {
+                        Picker("File Type", selection: $selectedFilter) {
+                            ForEach(SavedFileFilter.allCases) { filter in
+                                Text(filter.title)
+                                    .tag(filter)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+                        .padding(.vertical, 10)
 
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text(file.url.lastPathComponent)
-                                                .font(.headline)
-                                                .lineLimit(2)
+                        if filteredGroups.isEmpty {
+                            ContentUnavailableView(
+                                "No Matching Files",
+                                systemImage: "line.3.horizontal.decrease.circle",
+                                description: Text(
+                                    "There are no saved files in this category."
+                                )
+                            )
+                        } else {
+                            List {
+                                ForEach(filteredGroups) { group in
+                                    Section(group.gameName) {
+                                        ForEach(group.files) { file in
+                                            HStack(
+                                                alignment: .top,
+                                                spacing: 12
+                                            ) {
+                                                SavedFileThumbnail(
+                                                    url: file.url
+                                                )
 
-                                            HStack(spacing: 10) {
-                                                Text(file.format)
-                                                Text(file.size)
+                                                VStack(
+                                                    alignment: .leading,
+                                                    spacing: 8
+                                                ) {
+                                                    Text(file.url.lastPathComponent)
+                                                        .font(.headline)
+                                                        .lineLimit(2)
+
+                                                    HStack(spacing: 10) {
+                                                        Text(file.format)
+                                                        Text(file.size)
+                                                    }
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+
+                                                    HStack {
+                                                        Button {
+                                                            previewItem = PreviewItem(
+                                                                url: file.url
+                                                            )
+                                                        } label: {
+                                                            Label(
+                                                                "Preview",
+                                                                systemImage: "eye"
+                                                            )
+                                                        }
+                                                        .buttonStyle(.bordered)
+
+                                                        Button {
+                                                            detailItem = FileDetailItem(
+                                                                url: file.url,
+                                                                gameName: group.gameName
+                                                            )
+                                                        } label: {
+                                                            Label(
+                                                                "Details",
+                                                                systemImage: "info.circle"
+                                                            )
+                                                        }
+                                                        .buttonStyle(.bordered)
+
+                                                        ShareLink(item: file.url) {
+                                                            Image(
+                                                                systemName: "square.and.arrow.up"
+                                                            )
+                                                        }
+                                                        .buttonStyle(.bordered)
+                                                        .accessibilityLabel("Share file")
+
+                                                        Button(role: .destructive) {
+                                                            pendingDelete = file
+                                                        } label: {
+                                                            Image(systemName: "trash")
+                                                        }
+                                                        .buttonStyle(.bordered)
+                                                        .accessibilityLabel(
+                                                            "Delete saved file"
+                                                        )
+                                                    }
+                                                }
                                             }
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-
-                                            HStack {
-                                                Button {
-                                                    previewItem = PreviewItem(url: file.url)
-                                                } label: {
-                                                    Label("Preview", systemImage: "eye")
-                                                }
-                                                .buttonStyle(.bordered)
-
-                                                Button {
-                                                    detailItem = FileDetailItem(
-                                                        url: file.url,
-                                                        gameName: group.gameName
-                                                    )
-                                                } label: {
-                                                    Label("Details", systemImage: "info.circle")
-                                                }
-                                                .buttonStyle(.bordered)
-
-                                                ShareLink(item: file.url) {
-                                                    Image(systemName: "square.and.arrow.up")
-                                                }
-                                                .buttonStyle(.bordered)
-                                                .accessibilityLabel("Share file")
-
-                                                Button(role: .destructive) {
-                                                    pendingDelete = file
-                                                } label: {
-                                                    Image(systemName: "trash")
-                                                }
-                                                .buttonStyle(.bordered)
-                                                .accessibilityLabel("Delete saved file")
-                                            }
+                                            .padding(.vertical, 6)
                                         }
                                     }
-                                    .padding(.vertical, 6)
                                 }
                             }
                         }
@@ -206,7 +302,9 @@ struct SavedSectionFilesView: View {
                     options: [.skipsHiddenFiles]
                 )
 
-                let savedFiles = contents.compactMap { url -> SavedSectionFile? in
+                let savedFiles = contents.compactMap {
+                    url -> SavedSectionFile? in
+
                     let ext = url.pathExtension.lowercased()
 
                     guard supportedExtensions.contains(ext) else {
@@ -217,7 +315,9 @@ struct SavedSectionFilesView: View {
                         atPath: url.path
                     )
 
-                    let bytes = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+                    let bytes = (
+                        attributes?[.size] as? NSNumber
+                    )?.int64Value ?? 0
 
                     return SavedSectionFile(
                         url: url,
@@ -322,7 +422,10 @@ private struct FileDetailsView: View {
 
             Section {
                 ShareLink(item: url) {
-                    Label("Share This File", systemImage: "square.and.arrow.up")
+                    Label(
+                        "Share This File",
+                        systemImage: "square.and.arrow.up"
+                    )
                 }
             }
         }
@@ -364,6 +467,8 @@ private struct SavedFileThumbnail: View {
             return "chevron.left.forwardslash.chevron.right"
         case "pdf":
             return "doc.richtext"
+        case "mp4", "mov", "m4v":
+            return "video"
         default:
             return "doc"
         }
@@ -415,6 +520,14 @@ private struct SavedSectionFile: Identifiable {
             return "GIF Image"
         case "jpg", "jpeg":
             return "JPEG Image"
+        case "heic":
+            return "HEIC Image"
+        case "mp4":
+            return "MP4 Video"
+        case "mov":
+            return "MOV Video"
+        case "m4v":
+            return "M4V Video"
         case "txt":
             return "Text File"
         case "json":
