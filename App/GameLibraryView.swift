@@ -6,6 +6,9 @@ private struct LibraryMetadata {
     var applicationVersion: UInt32?
     var contentType: UInt8?
     var contentCount: Int?
+    var ncaCount: Int
+    var plaintextCNMTCount: Int
+    var encryptedCNMTCount: Int
     var status: String
 }
 
@@ -66,15 +69,8 @@ struct GameLibraryView: View {
                 Text("Game Metadata")
                     .font(.subheadline.weight(.semibold))
 
-                metadataLine(
-                    "NCA Program ID",
-                    result.programID
-                )
-
-                metadataLine(
-                    "CNMT Title ID",
-                    result.titleID
-                )
+                metadataLine("NCA Program ID", result.programID)
+                metadataLine("CNMT Title ID", result.titleID)
 
                 metadataLine(
                     "CNMT application version (raw)",
@@ -89,6 +85,16 @@ struct GameLibraryView: View {
                 metadataLine(
                     "CNMT content entries",
                     result.contentCount.map(String.init)
+                )
+
+                metadataLine("NCA files found", String(result.ncaCount))
+                metadataLine(
+                    "Plaintext CNMT files",
+                    String(result.plaintextCNMTCount)
+                )
+                metadataLine(
+                    "Encrypted CNMT containers",
+                    String(result.encryptedCNMTCount)
                 )
 
                 Text(result.status)
@@ -181,22 +187,58 @@ struct GameLibraryView: View {
             var foundVersion: UInt32?
             var foundContentType: UInt8?
             var foundContentCount: Int?
+
+            var ncaCount = 0
+            var plaintextCNMTCount = 0
+            var encryptedCNMTCount = 0
+
             var status = "Metadata scan finished."
 
             do {
-                let files = try FileManager.default.contentsOfDirectory(
+                guard FileManager.default.fileExists(
+                    atPath: folder.path
+                ) else {
+                    throw CocoaError(.fileNoSuchFile)
+                }
+
+                guard let enumerator = FileManager.default.enumerator(
                     at: folder,
                     includingPropertiesForKeys: [.isRegularFileKey],
                     options: [.skipsHiddenFiles]
-                )
-
-                let ncaFiles = files.filter {
-                    $0.pathExtension.lowercased() == "nca"
+                ) else {
+                    throw CocoaError(.fileReadUnknown)
                 }
 
-                let cnmtFiles = files.filter {
-                    $0.pathExtension.lowercased() == "cnmt"
+                var ncaFiles: [URL] = []
+                var cnmtFiles: [URL] = []
+
+                for case let file as URL in enumerator {
+                    let values = try? file.resourceValues(
+                        forKeys: [.isRegularFileKey]
+                    )
+
+                    guard values?.isRegularFile == true else {
+                        continue
+                    }
+
+                    let fileName = file.lastPathComponent.lowercased()
+                    let extensionName = file.pathExtension.lowercased()
+
+                    if extensionName == "nca" {
+                        ncaFiles.append(file)
+
+                        if fileName.hasSuffix(".cnmt.nca") {
+                            encryptedCNMTCount += 1
+                        }
+                    }
+
+                    if extensionName == "cnmt" {
+                        cnmtFiles.append(file)
+                    }
                 }
+
+                ncaCount = ncaFiles.count
+                plaintextCNMTCount = cnmtFiles.count
 
                 for file in ncaFiles {
                     let inspection = NCAInspector.inspect(file)
@@ -223,9 +265,15 @@ struct GameLibraryView: View {
                 if ncaFiles.isEmpty && cnmtFiles.isEmpty {
                     status = "No extracted NCA or plaintext CNMT files found."
                 } else if foundProgramID == nil && foundTitleID == nil {
-                    status = "Files found, but metadata was not recognized."
+                    if encryptedCNMTCount > 0 {
+                        status = "Encrypted CNMT containers found. Their metadata is not decrypted or parsed."
+                    } else {
+                        status = "Files found, but readable metadata was not recognized."
+                    }
+                } else if encryptedCNMTCount > 0 {
+                    status = "Readable metadata found. Encrypted CNMT containers were detected but not parsed."
                 } else {
-                    status = "Metadata read from available extracted files. Encrypted CNMT containers are not parsed."
+                    status = "Readable metadata found in extracted files."
                 }
 
             } catch {
@@ -238,6 +286,9 @@ struct GameLibraryView: View {
                 applicationVersion: foundVersion,
                 contentType: foundContentType,
                 contentCount: foundContentCount,
+                ncaCount: ncaCount,
+                plaintextCNMTCount: plaintextCNMTCount,
+                encryptedCNMTCount: encryptedCNMTCount,
                 status: status
             )
 
