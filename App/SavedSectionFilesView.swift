@@ -324,32 +324,52 @@ struct SavedSectionFilesView: View {
         }
     }
 
+    // ZIP creation runs in the background so the interface stays responsive.
     private func createZip() {
         let files = selectedFiles
         guard !files.isEmpty else { return }
 
+        let entries = files.map { file -> ZIPArchiveWriter.Entry in
+            let game = groups.first(where: {
+                $0.files.contains(where: { $0.id == file.id })
+            })?.gameName ?? "Files"
+
+            let safeGameName = game.replacingOccurrences(
+                of: "/",
+                with: "-"
+            )
+
+            return ZIPArchiveWriter.Entry(
+                fileURL: file.url,
+                archivePath: "\(safeGameName)/\(file.url.lastPathComponent)"
+            )
+        }
+
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NxNative-Selected-Files-\(UUID().uuidString).zip"
+            )
+
         isCreatingZip = true
 
-        do {
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent("NxNative-Selected-Files-\(UUID().uuidString).zip")
-
-            let entries = files.map { file -> ZIPArchiveWriter.Entry in
-                let game = groups.first(where: { $0.files.contains(where: { $0.id == file.id }) })?.gameName ?? "Files"
-                let safeGameName = game.replacingOccurrences(of: "/", with: "-")
-                return ZIPArchiveWriter.Entry(
-                    fileURL: file.url,
-                    archivePath: "\(safeGameName)/\(file.url.lastPathComponent)"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try ZIPArchiveWriter.createArchive(
+                    entries: entries,
+                    at: destination
                 )
-            }
 
-            try ZIPArchiveWriter.createArchive(entries: entries, at: destination)
-            zipURL = destination
-            isCreatingZip = false
-            isZipSharePresented = true
-        } catch {
-            isCreatingZip = false
-            errorMessage = error.localizedDescription
+                DispatchQueue.main.async {
+                    zipURL = destination
+                    isCreatingZip = false
+                    isZipSharePresented = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isCreatingZip = false
+                    errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
