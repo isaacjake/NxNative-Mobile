@@ -50,6 +50,8 @@ struct GameLibraryView: View {
         Self.loadMetadata()
 
     @State private var scanning: Set<UUID> = []
+    @State private var searchText = ""
+    @State private var selectedKind: GameContentKind?
 
     private static let metadataStorageKey =
         "Xerenge.LibraryMetadata.v1"
@@ -94,23 +96,128 @@ struct GameLibraryView: View {
                 relationshipsSection
 
                 ForEach(sections, id: \.kind) { section in
-                    Section(section.title) {
-                        let indices = games.indices.filter {
-                            games[$0].effectiveContentKind == section.kind
-                        }
+                    if selectedKind == nil ||
+                        selectedKind == section.kind {
 
-                        if indices.isEmpty {
-                            Text("No items")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(indices, id: \.self) { index in
-                                gameRow(at: index)
+                        Section(section.title) {
+                            let indices = filteredIndices(
+                                for: section.kind
+                            )
+
+                            if indices.isEmpty {
+                                Text("No items")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(indices, id: \.self) { index in
+                                    gameRow(at: index)
+                                }
                             }
                         }
                     }
                 }
+
+                if !games.isEmpty && filteredGameCount == 0 {
+                    Section {
+                        ContentUnavailableView(
+                            "No Matching Games",
+                            systemImage: "magnifyingglass",
+                            description: Text(
+                                "Try another search or change the content filter."
+                            )
+                        )
+                    }
+                }
+            }
+            .searchable(
+                text: $searchText,
+                prompt: "Search games or filenames"
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            selectedKind = nil
+                        } label: {
+                            filterLabel("All Content", kind: nil)
+                        }
+
+                        Button {
+                            selectedKind = .baseGame
+                        } label: {
+                            filterLabel("Base Games", kind: .baseGame)
+                        }
+
+                        Button {
+                            selectedKind = .update
+                        } label: {
+                            filterLabel("Updates", kind: .update)
+                        }
+
+                        Button {
+                            selectedKind = .downloadableContent
+                        } label: {
+                            filterLabel("DLC", kind: .downloadableContent)
+                        }
+
+                        Button {
+                            selectedKind = .unknown
+                        } label: {
+                            filterLabel("Unclassified", kind: .unknown)
+                        }
+                    } label: {
+                        Label(
+                            "Filter",
+                            systemImage: "line.3.horizontal.decrease.circle"
+                        )
+                    }
+                }
             }
             .navigationTitle("Library")
+        }
+    }
+
+    // MARK: - Search and Filtering
+
+    private var filteredGameCount: Int {
+        games.filter { matchesSearch($0) && matchesSelectedKind($0) }.count
+    }
+
+    private func matchesSearch(_ game: ImportedGame) -> Bool {
+        let query = searchText.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        guard !query.isEmpty else { return true }
+
+        return game.name.localizedCaseInsensitiveContains(query) ||
+            game.fileName.localizedCaseInsensitiveContains(query) ||
+            game.fileURL.lastPathComponent.localizedCaseInsensitiveContains(query)
+    }
+
+    private func matchesSelectedKind(_ game: ImportedGame) -> Bool {
+        guard let selectedKind else { return true }
+        return game.effectiveContentKind == selectedKind
+    }
+
+    private func filteredIndices(
+        for kind: GameContentKind
+    ) -> [Int] {
+        games.indices.filter { index in
+            games[index].effectiveContentKind == kind &&
+            matchesSearch(games[index]) &&
+            matchesSelectedKind(games[index])
+        }
+    }
+
+    @ViewBuilder
+    private func filterLabel(
+        _ title: String,
+        kind: GameContentKind?
+    ) -> some View {
+        if selectedKind == kind {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
         }
     }
 
@@ -142,35 +249,11 @@ struct GameLibraryView: View {
         }.count
 
         return Section("Library Summary") {
-            summaryRow(
-                "Base Games",
-                count: baseCount,
-                icon: "gamecontroller.fill"
-            )
-
-            summaryRow(
-                "Linked Updates",
-                count: linkedUpdates,
-                icon: "arrow.up.circle"
-            )
-
-            summaryRow(
-                "Linked DLC",
-                count: linkedDLC,
-                icon: "puzzlepiece"
-            )
-
-            summaryRow(
-                "Unlinked Updates",
-                count: unlinkedUpdates,
-                icon: "link"
-            )
-
-            summaryRow(
-                "Unlinked DLC",
-                count: unlinkedDLC,
-                icon: "link"
-            )
+            summaryRow("Base Games", count: baseCount, icon: "gamecontroller.fill")
+            summaryRow("Linked Updates", count: linkedUpdates, icon: "arrow.up.circle")
+            summaryRow("Linked DLC", count: linkedDLC, icon: "puzzlepiece")
+            summaryRow("Unlinked Updates", count: unlinkedUpdates, icon: "link")
+            summaryRow("Unlinked DLC", count: unlinkedDLC, icon: "link")
         }
     }
 
@@ -181,9 +264,7 @@ struct GameLibraryView: View {
     ) -> some View {
         HStack {
             Label(title, systemImage: icon)
-
             Spacer()
-
             Text("\(count)")
                 .font(.headline.monospacedDigit())
         }
@@ -390,20 +471,9 @@ struct GameLibraryView: View {
                     String(result.contentCount)
                 )
 
-                metadataLine(
-                    "NCA files found",
-                    String(result.ncaCount)
-                )
-
-                metadataLine(
-                    "Plaintext CNMT files",
-                    String(result.plaintextCNMTCount)
-                )
-
-                metadataLine(
-                    "Encrypted CNMT containers",
-                    String(result.encryptedCNMTCount)
-                )
+                metadataLine("NCA files found", String(result.ncaCount))
+                metadataLine("Plaintext CNMT files", String(result.plaintextCNMTCount))
+                metadataLine("Encrypted CNMT containers", String(result.encryptedCNMTCount))
 
                 Divider()
 
@@ -448,10 +518,7 @@ struct GameLibraryView: View {
                 if scanning.contains(game.id) {
                     Label("Scanning Metadata...", systemImage: "hourglass")
                 } else {
-                    Label(
-                        "Scan Game Metadata",
-                        systemImage: "doc.text.magnifyingglass"
-                    )
+                    Label("Scan Game Metadata", systemImage: "doc.text.magnifyingglass")
                 }
             }
             .buttonStyle(.bordered)
