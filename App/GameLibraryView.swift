@@ -2,7 +2,10 @@ import SwiftUI
 
 private struct LibraryMetadata {
     var programID: String?
-    var cnmtVersion: UInt32?
+    var titleID: String?
+    var applicationVersion: UInt32?
+    var contentType: UInt8?
+    var contentCount: Int?
     var status: String
 }
 
@@ -63,15 +66,30 @@ struct GameLibraryView: View {
                 Text("Game Metadata")
                     .font(.subheadline.weight(.semibold))
 
-                Text("Program ID: \(result.programID ?? "Not detected")")
-                    .font(.caption)
-
-                Text(
-                    result.cnmtVersion.map {
-                        "CNMT version value: \($0)"
-                    } ?? "CNMT version: Not detected"
+                metadataLine(
+                    "NCA Program ID",
+                    result.programID
                 )
-                .font(.caption)
+
+                metadataLine(
+                    "CNMT Title ID",
+                    result.titleID
+                )
+
+                metadataLine(
+                    "CNMT application version (raw)",
+                    result.applicationVersion.map(String.init)
+                )
+
+                metadataLine(
+                    "CNMT content type",
+                    result.contentType.map { String($0) }
+                )
+
+                metadataLine(
+                    "CNMT content entries",
+                    result.contentCount.map(String.init)
+                )
 
                 Text(result.status)
                     .font(.caption)
@@ -84,7 +102,10 @@ struct GameLibraryView: View {
                 if scanning.contains(game.id) {
                     Label("Scanning Metadata...", systemImage: "hourglass")
                 } else {
-                    Label("Scan Game Metadata", systemImage: "doc.text.magnifyingglass")
+                    Label(
+                        "Scan Game Metadata",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
                 }
             }
             .buttonStyle(.bordered)
@@ -102,6 +123,23 @@ struct GameLibraryView: View {
             .pickerStyle(.menu)
         }
         .padding(.vertical, 4)
+    }
+
+    private func metadataLine(
+        _ label: String,
+        _ value: String?
+    ) -> some View {
+        HStack(alignment: .top) {
+            Text(label + ":")
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Text(value ?? "Not detected")
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .font(.caption)
     }
 
     private func classificationBinding(
@@ -139,7 +177,10 @@ struct GameLibraryView: View {
                 )
 
             var foundProgramID: String?
+            var foundTitleID: String?
             var foundVersion: UInt32?
+            var foundContentType: UInt8?
+            var foundContentCount: Int?
             var status = "Metadata scan finished."
 
             do {
@@ -170,19 +211,21 @@ struct GameLibraryView: View {
                 for file in cnmtFiles {
                     let inspection = CNMTInspector.inspect(file)
 
-                    if inspection.isRecognized,
-                       let version = inspection.version {
-                        foundVersion = version
+                    if inspection.isRecognized {
+                        foundTitleID = inspection.titleID
+                        foundVersion = inspection.version
+                        foundContentType = inspection.contentType
+                        foundContentCount = inspection.contentCount
                         break
                     }
                 }
 
                 if ncaFiles.isEmpty && cnmtFiles.isEmpty {
                     status = "No extracted NCA or plaintext CNMT files found."
-                } else if foundProgramID == nil && foundVersion == nil {
+                } else if foundProgramID == nil && foundTitleID == nil {
                     status = "Files found, but metadata was not recognized."
                 } else {
-                    status = "Metadata read from available extracted files."
+                    status = "Metadata read from available extracted files. Encrypted CNMT containers are not parsed."
                 }
 
             } catch {
@@ -191,7 +234,10 @@ struct GameLibraryView: View {
 
             let result = LibraryMetadata(
                 programID: foundProgramID,
-                cnmtVersion: foundVersion,
+                titleID: foundTitleID,
+                applicationVersion: foundVersion,
+                contentType: foundContentType,
+                contentCount: foundContentCount,
                 status: status
             )
 
