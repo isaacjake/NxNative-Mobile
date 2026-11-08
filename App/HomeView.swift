@@ -33,3 +33,75 @@ struct HomeView: View {
                             value: "\(gameCount)",
                             symbol: "gamecontroller.fill"
                         )
+
+                        summaryCard(
+                            title: "Build Status",
+                            value: "Not started",
+                            symbol: "hammer.fill"
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Project Status")
+                            .font(.headline)
+
+                        Text("Beta 1 covers install, import, inspection, packaging, and diagnostics. On-device game compilation is not implemented yet.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.gray.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                    VStack(spacing: 0) {
+                        NavigationLink {
+                            DiagnosticsView()
+                        } label: {
+                            Label("Diagnostics", systemImage: "stethoscope")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding()
+                        }
+
+                        Divider()
+
+                        NavigationLink {
+                            HandoffTestView()
+                        } label: {
+                            Label("Packaging test (debug)", systemImage: "shippingbox")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding()
+                        }
+                    }
+                    .background(.gray.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .padding()
+            }
+            .navigationTitle("Home")
+        }
+    }
+
+    private func summaryCard(
+        title: String,
+        value: String,
+        symbol: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.title2)
+                .foregroundStyle(.cyan)
+
+            Text(value)
+                .font(.title2.bold())
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.gray.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
