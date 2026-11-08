@@ -5,6 +5,7 @@ private struct SavedNCASectionResult: Identifiable {
     let fileName: String
     let sectionNumber: Int
     let inspection: NCASectionInspection
+    let sourceURL: URL
 }
 
 struct GamesView: View {
@@ -89,7 +90,7 @@ struct GamesView: View {
                                 }
 
                                 if let results = savedSectionResults[game.id] {
-                                    savedNCAResultsCard(results)
+                                    savedNCAResultsCard(results, gameID: game.id)
                                 }
 
                                 if let result = inspectionResults[game.id] {
@@ -233,7 +234,8 @@ struct GamesView: View {
     }
 
     private func savedNCAResultsCard(
-        _ results: [SavedNCASectionResult]
+        _ results: [SavedNCASectionResult],
+        gameID: UUID
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Saved NCA Section Inspection")
@@ -279,6 +281,13 @@ struct GamesView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                             }
+                            .padding(.leading, 8)
+
+                            NCASectionFileExportView(
+                                entry: entry,
+                                sourceURL: item.sourceURL,
+                                gameID: gameID
+                            )
                             .padding(.leading, 8)
                         }
 
@@ -366,7 +375,8 @@ struct GamesView: View {
                                 id: "\(fileURL.lastPathComponent)-\(section.index)",
                                 fileName: fileURL.lastPathComponent,
                                 sectionNumber: section.index + 1,
-                                inspection: inspection
+                                inspection: inspection,
+                                sourceURL: fileURL
                             )
                         )
                     }
