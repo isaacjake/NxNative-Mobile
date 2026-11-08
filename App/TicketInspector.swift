@@ -28,7 +28,7 @@ enum TicketInspector {
                 return TicketInspection(
                     fileSize: fileSize,
                     isRecognized: false,
-                    message: "Unexpected ticket size. Signature inspection skipped."
+                    message: "Unexpected ticket size. Inspection limited."
                 )
             }
 
@@ -43,26 +43,34 @@ enum TicketInspector {
             }
 
             let signatureType =
-                (UInt32(data[0]) << 24) |
-                (UInt32(data[1]) << 16) |
-                (UInt32(data[2]) << 8) |
-                UInt32(data[3])
+                UInt32(data[0]) |
+                (UInt32(data[1]) << 8) |
+                (UInt32(data[2]) << 16) |
+                (UInt32(data[3]) << 24)
 
             let signatureName: String
 
             switch signatureType {
             case 0x00010000:
-                signatureName = "RSA-4096"
+                signatureName = "RSA-4096 SHA-1"
             case 0x00010001:
-                signatureName = "RSA-2048"
+                signatureName = "RSA-2048 SHA-1"
             case 0x00010002:
-                signatureName = "ECDSA"
+                signatureName = "ECDSA SHA-1"
+            case 0x00010003:
+                signatureName = "RSA-4096 SHA-256"
+            case 0x00010004:
+                signatureName = "RSA-2048 SHA-256"
+            case 0x00010005:
+                signatureName = "ECDSA SHA-256"
+            case 0x00010006:
+                signatureName = "HMAC-SHA1"
             default:
                 return TicketInspection(
                     fileSize: fileSize,
                     isRecognized: false,
                     message: String(
-                        format: "Unknown signature type: 0x%08X. No secret data was read.",
+                        format: "Unknown signature type: 0x%08X",
                         signatureType
                     )
                 )
@@ -71,7 +79,7 @@ enum TicketInspector {
             return TicketInspection(
                 fileSize: fileSize,
                 isRecognized: true,
-                message: "Ticket signature type: \(signatureName). Signature metadata inspected; secret key material was not accessed."
+                message: "Signature metadata: \(signatureName). Secret key material was not accessed."
             )
 
         } catch {
