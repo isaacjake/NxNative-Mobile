@@ -1,3 +1,4 @@
+
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,9 +12,82 @@ struct BuildView: View {
     @State private var statusMessage = ""
     @State private var showingStatus = false
 
+    @State private var games = ImportedGame.loadSaved()
+    @State private var selectedGameID: UUID?
+    @State private var preflightMessage = ""
+    @State private var preflightLines: [String] = []
+    @State private var isRunningPreflight = false
+
+    private var selectedGame: ImportedGame? {
+        games.first { $0.id == selectedGameID }
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                Section("Game Preflight") {
+                    if games.isEmpty {
+                        ContentUnavailableView(
+                            "No Imported Games",
+                            systemImage: "gamecontroller",
+                            description: Text("Import a game in the Games tab first.")
+                        )
+                    } else {
+                        Picker("Select Game", selection: $selectedGameID) {
+                            Text("Choose a game")
+                                .tag(UUID?.none)
+
+                            ForEach(games) { game in
+                                Text(game.name)
+                                    .tag(Optional(game.id))
+                            }
+                        }
+
+                        if let game = selectedGame {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(game.name)
+                                    .font(.headline)
+
+                                Text(game.fileURL.lastPathComponent)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Button {
+                                runPreflight(for: game)
+                            } label: {
+                                if isRunningPreflight {
+                                    Label("Checking Game...", systemImage: "hourglass")
+                                } else {
+                                    Label("Run Game Preflight", systemImage: "checkmark.shield")
+                                }
+                            }
+                            .disabled(isRunningPreflight)
+
+                            if !preflightMessage.isEmpty {
+                                Label(
+                                    preflightMessage,
+                                    systemImage: preflightMessage.hasPrefix("Preflight complete")
+                                        ? "checkmark.circle.fill"
+                                        : "exclamationmark.triangle.fill"
+                                )
+                                .font(.subheadline)
+                                .foregroundStyle(
+                                    preflightMessage.hasPrefix("Preflight complete")
+                                        ? .green
+                                        : .orange
+                                )
+                            }
+
+                            ForEach(Array(preflightLines.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
                 Section("Game Keys") {
                     HStack {
                         Label(
@@ -104,15 +178,24 @@ struct BuildView: View {
                     Text("Develop an on-device game compilation workflow without a Mac, Xcode, or hosted runners.")
                         .font(.footnote)
 
-                    Text("Key verification does not yet decrypt or compile games.")
+                    Text("Preflight checks archive structure only. It does not decrypt or compile game content.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Build")
             .onAppear {
+                games = ImportedGame.loadSaved()
                 hasKeys = KeyManager.hasKeys
                 hasTitleKeys = KeyManager.hasTitleKeys
+
+                if selectedGameID == nil {
+                    selectedGameID = games.first?.id
+                }
+            }
+            .onChange(of: selectedGameID) {
+                preflightMessage = ""
+                preflightLines = []
             }
             .fileImporter(
                 isPresented: $showingKeysPicker,
@@ -162,6 +245,104 @@ struct BuildView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(statusMessage)
+            }
+        }
+    }
+
+    private func runPreflight(for game: ImportedGame) {
+        guard !isRunningPreflight else { return }
+
+        isRunningPreflight = true
+        preflightMessage = "Checking archive structure..."
+        preflightLines = []
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var lines: [String] = []
+
+            let inspection = GameFileInspector.inspect(game.fileURL)
+
+            lines.append("File format: \(inspection.format)")
+            lines.append("Header check: \(inspection.isRecognized ? "Recognized" : "Not recognized")")
+
+            if !inspection.isRecognized {
+                DispatchQueue.main.async {
+                    preflightMessage = "Preflight could not recognize this game file."
+                    preflightLines = lines + [inspection.message]
+                    isRunningPreflight = false
+                }
+                return
+            }
+
+            if inspection.format == "XCI" {
+                lines.append("XCI directory inventory: Not yet supported")
+                lines.append("Next requirement: XCI partition and filesystem reader")
+                lines.append("Game content: Not decrypted or compiled")
+
+                DispatchQueue.main.async {
+                    preflightMessage = "Preflight complete — additional XCI support needed."
+                    preflightLines = lines
+                    isRunningPreflight = false
+                }
+                return
+            }
+
+            do {
+                let archive = try PFS0Archive.open(game.fileURL)
+                let entries = archive.entries
+
+                let ncaCount = entries.filter {
+                    $0.name.lowercased().hasSuffix(".nca")
+                }.count
+
+                let ticketCount = entries.filter {
+                    $0.name.lowercased().hasSuffix(".tik")
+                }.count
+
+                let certificateCount = entries.filter {
+                    $0.name.lowercased().hasSuffix(".cert")
+                }.count
+
+                let cnmtCount = entries.filter {
+                    $0.name.lowercased().hasSuffix(".cnmt")
+                }.count
+
+                let otherCount = entries.count
+                    - ncaCount
+                    - ticketCount
+                    - certificateCount
+                    - cnmtCount
+
+                let totalBytes = entries.reduce(UInt64(0)) {
+                    $0 &+ $1.size
+                }
+
+                let formattedSize = ByteCountFormatter.string(
+                    fromByteCount: Int64(clamping: totalBytes),
+                    countStyle: .file
+                )
+
+                lines.append("PFS0 directory: Valid")
+                lines.append("Archive entries: \(entries.count)")
+                lines.append("NCA files: \(ncaCount)")
+                lines.append("Ticket files: \(ticketCount)")
+                lines.append("Certificate files: \(certificateCount)")
+                lines.append("Plaintext CNMT files: \(cnmtCount)")
+                lines.append("Other entries: \(otherCount)")
+                lines.append("Total listed entry size: \(formattedSize)")
+                lines.append("NCA content: Not decrypted")
+                lines.append("Native compilation: Not yet implemented")
+
+                DispatchQueue.main.async {
+                    preflightMessage = "Preflight complete — archive metadata validated."
+                    preflightLines = lines
+                    isRunningPreflight = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    preflightMessage = "Preflight failed — archive could not be read."
+                    preflightLines = lines + [error.localizedDescription]
+                    isRunningPreflight = false
+                }
             }
         }
     }
