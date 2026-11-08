@@ -95,7 +95,7 @@ enum KeyManager {
 
             if name == "nca_header_key" || name == "header_key" {
                 let value = parts[1].trimmingCharacters(
-                    .whitespacesAndNewlines
+                    in: .whitespacesAndNewlines
                 )
 
                 guard let bytes = hexData(value), bytes.count == 32 else {
@@ -163,6 +163,7 @@ enum KeyManager {
             let identifier = parts[0].trimmingCharacters(
                 in: .whitespacesAndNewlines
             )
+
             let key = parts[1].trimmingCharacters(
                 in: .whitespacesAndNewlines
             )
@@ -202,6 +203,7 @@ enum KeyManager {
 
     private static func readFile(_ url: URL) throws -> Data {
         let accessed = url.startAccessingSecurityScopedResource()
+
         defer {
             if accessed {
                 url.stopAccessingSecurityScopedResource()
