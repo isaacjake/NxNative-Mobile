@@ -1,3 +1,4 @@
+
 import SwiftUI
 import QuickLook
 import UIKit
@@ -10,7 +11,7 @@ struct SavedSectionFilesView: View {
     @State private var errorMessage: String?
 
     private let supportedExtensions: Set<String> = [
-        "png", "gif", "jpg", "jpeg", "txt", "json", "xml"
+        "png", "gif", "jpg", "jpeg", "txt", "json", "xml", "pdf"
     ]
 
     var body: some View {
@@ -361,6 +362,8 @@ private struct SavedFileThumbnail: View {
             return "curlybraces"
         case "xml":
             return "chevron.left.forwardslash.chevron.right"
+        case "pdf":
+            return "doc.richtext"
         default:
             return "doc"
         }
@@ -418,6 +421,8 @@ private struct SavedSectionFile: Identifiable {
             return "JSON Data"
         case "xml":
             return "XML Document"
+        case "pdf":
+            return "PDF Document"
         default:
             return "File"
         }
