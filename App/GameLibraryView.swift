@@ -1,238 +1,578 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
-struct ContentView: View {
-    @State private var selectedTab = 0
-    @State private var importedGames = ImportedGame.loadSaved()
-    @State private var showingImporter = false
-    @State private var importError: String?
+private struct LibraryMetadata: Codable {
+    var programID: String?
+    var titleID: String?
+    var applicationVersion: UInt32?
+    var contentType: UInt8?
+    var contentCount: Int
+    var ncaCount: Int
+    var plaintextCNMTCount: Int
+    var encryptedCNMTCount: Int
+    var status: String
 
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            HomeView(
-                gameCount: importedGames.count,
-                importAction: { showingImporter = true }
-            )
-            .tabItem {
-                Label("Home", systemImage: "house.fill")
-            }
-            .tag(0)
+    var suggestedKind: GameContentKind? {
+        guard let contentType else { return nil }
 
-            GamesView(
-                games: importedGames,
-                importAction: { showingImporter = true },
-                deleteAction: { game in
-                    // Remove links pointing to the deleted game.
-                    for index in importedGames.indices {
-                        if importedGames[index].baseGameID == game.id {
-                            importedGames[index].baseGameID = nil
-                        }
-                    }
-
-                    importedGames.removeAll { $0.id == game.id }
-                    ImportedGame.save(importedGames)
-
-                    try? FileManager.default.removeItem(
-                        at: game.fileURL
-                    )
-                }
-            )
-            .tabItem {
-                Label("Games", systemImage: "gamecontroller.fill")
-            }
-            .tag(1)
-
-            GameLibraryView(games: $importedGames)
-                .tabItem {
-                    Label("Library", systemImage: "books.vertical.fill")
-                }
-                .tag(2)
-
-            SavedSectionFilesView()
-                .tabItem {
-                    Label("Saved Files", systemImage: "folder.fill")
-                }
-                .tag(3)
-
-            BuildView()
-                .tabItem {
-                    Label("Build", systemImage: "hammer.fill")
-                }
-                .tag(4)
-
-            OutputView()
-                .tabItem {
-                    Label("Output", systemImage: "archivebox.fill")
-                }
-                .tag(5)
-        }
-        .tint(.cyan)
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: [.nspGame, .xciGame],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                importGames(urls)
-
-            case .failure(let error):
-                importError = error.localizedDescription
-            }
-        }
-        .alert(
-            "Import Error",
-            isPresented: Binding(
-                get: { importError != nil },
-                set: { if !$0 { importError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {
-                importError = nil
-            }
-        } message: {
-            Text(importError ?? "Unknown error")
+        switch contentType {
+        case 0x80: return .baseGame
+        case 0x81: return .update
+        case 0x82: return .downloadableContent
+        default: return nil
         }
     }
 
-    private func importGames(_ urls: [URL]) {
-        let manager = FileManager.default
+    var suggestionExplanation: String {
+        guard let contentType else {
+            return "No readable CNMT content type was found. Encrypted CNMT metadata is not interpreted."
+        }
 
-        let folder = manager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("NxNativeGames")
-
-        do {
-            try manager.createDirectory(
-                at: folder,
-                withIntermediateDirectories: true
+        switch contentType {
+        case 0x80:
+            return "CNMT type 0x80 identifies an Application. Suggestion only."
+        case 0x81:
+            return "CNMT type 0x81 identifies a Patch. Suggestion only."
+        case 0x82:
+            return "CNMT type 0x82 identifies Add-on Content. Suggestion only."
+        default:
+            return String(
+                format: "CNMT type 0x%02X is not mapped.",
+                contentType
             )
-
-            for url in urls {
-                let hasAccess =
-                    url.startAccessingSecurityScopedResource()
-
-                defer {
-                    if hasAccess {
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-
-                let fileName = UUID().uuidString + "." +
-                    url.pathExtension.lowercased()
-
-                let destination = folder.appendingPathComponent(fileName)
-
-                try manager.copyItem(
-                    at: url,
-                    to: destination
-                )
-
-                let game = ImportedGame(
-                    name: url.deletingPathExtension().lastPathComponent,
-                    fileName: fileName
-                )
-
-                importedGames.append(game)
-            }
-
-            ImportedGame.save(importedGames)
-
-        } catch {
-            importError = error.localizedDescription
         }
     }
 }
 
-extension UTType {
-    static let nspGame =
-        UTType(filenameExtension: "nsp") ?? .data
+struct GameLibraryView: View {
+    @Binding var games: [ImportedGame]
 
-    static let xciGame =
-        UTType(filenameExtension: "xci") ?? .data
-}
+    @State private var metadata: [UUID: LibraryMetadata] =
+        Self.loadMetadata()
 
-enum GameContentKind: String, Codable, CaseIterable, Identifiable {
-    case unknown
-    case baseGame
-    case update
-    case downloadableContent
+    @State private var scanning: Set<UUID> = []
 
-    var id: String { rawValue }
+    private static let metadataStorageKey =
+        "Xerenge.LibraryMetadata.v1"
 
-    var displayName: String {
-        switch self {
-        case .unknown:
-            return "Unclassified"
-        case .baseGame:
-            return "Base Game"
-        case .update:
-            return "Update"
-        case .downloadableContent:
-            return "DLC"
-        }
-    }
-}
+    private let sections: [(kind: GameContentKind, title: String)] = [
+        (.baseGame, "Base Games"),
+        (.update, "Updates"),
+        (.downloadableContent, "DLC"),
+        (.unknown, "Unclassified Files")
+    ]
 
-struct ImportedGame: Identifiable, Codable {
-    let id: UUID
-    let name: String
-    let fileName: String
-
-    var contentKind: GameContentKind?
-    var baseGameID: UUID?
-
-    init(
-        name: String,
-        fileName: String,
-        contentKind: GameContentKind? = nil,
-        baseGameID: UUID? = nil
-    ) {
-        self.id = UUID()
-        self.name = name
-        self.fileName = fileName
-        self.contentKind = contentKind
-        self.baseGameID = baseGameID
-    }
-
-    var effectiveContentKind: GameContentKind {
-        contentKind ?? .unknown
-    }
-
-    var fileURL: URL {
-        let folder = FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("NxNativeGames")
-
-        return folder.appendingPathComponent(fileName)
-    }
-
-    private static var libraryURL: URL {
-        FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("games-library.json")
-    }
-
-    static func loadSaved() -> [ImportedGame] {
-        guard let data = try? Data(contentsOf: libraryURL),
-              let games = try? JSONDecoder().decode(
-                [ImportedGame].self,
-                from: data
-              ) else {
-            return []
+    private static func loadMetadata() -> [UUID: LibraryMetadata] {
+        guard let data = UserDefaults.standard.data(
+            forKey: metadataStorageKey
+        ),
+        let saved = try? JSONDecoder().decode(
+            [UUID: LibraryMetadata].self,
+            from: data
+        ) else {
+            return [:]
         }
 
-        return games
+        return saved
     }
 
-    static func save(_ games: [ImportedGame]) {
-        guard let data = try? JSONEncoder().encode(games) else {
+    private func saveMetadata() {
+        guard let data = try? JSONEncoder().encode(metadata) else {
             return
         }
 
-        try? data.write(to: libraryURL, options: .atomic)
+        UserDefaults.standard.set(
+            data,
+            forKey: Self.metadataStorageKey
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                relationshipsSection
+
+                ForEach(sections, id: \.kind) { section in
+                    Section(section.title) {
+                        let indices = games.indices.filter {
+                            games[$0].effectiveContentKind == section.kind
+                        }
+
+                        if indices.isEmpty {
+                            Text("No items")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(indices, id: \.self) { index in
+                                gameRow(at: index)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Library")
+        }
+    }
+
+    private var relationshipsSection: some View {
+        Section("Game Relationships") {
+            let baseGames = games.filter {
+                $0.effectiveContentKind == .baseGame
+            }
+
+            if baseGames.isEmpty {
+                Text("Classify a game as Base Game to begin linking related files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(baseGames) { baseGame in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            baseGame.name,
+                            systemImage: "gamecontroller.fill"
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        Text(
+                            "Base Game Title ID: \(metadata[baseGame.id]?.titleID ?? "Not available")"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+
+                        let relatedGames = games.filter {
+                            $0.baseGameID == baseGame.id
+                        }
+
+                        if relatedGames.isEmpty {
+                            Text("No linked updates or DLC.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(relatedGames) { related in
+                                relationshipDetails(
+                                    for: related,
+                                    baseGame: baseGame
+                                )
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            let unlinked = games.filter {
+                ($0.effectiveContentKind == .update ||
+                 $0.effectiveContentKind == .downloadableContent) &&
+                $0.baseGameID == nil
+            }
+
+            if !unlinked.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Not linked to a base game")
+                        .font(.subheadline.weight(.semibold))
+
+                    ForEach(unlinked) { game in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(game.name)
+                                .font(.caption.weight(.medium))
+
+                            Text(
+                                "Relationship type: \(game.effectiveContentKind.displayName)"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+
+                            Text(
+                                "CNMT Title ID: \(metadata[game.id]?.titleID ?? "Not available")"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+
+                            Text("Base Game: Not linked")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func relationshipDetails(
+        for related: ImportedGame,
+        baseGame: ImportedGame
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Image(
+                    systemName:
+                        related.effectiveContentKind == .update
+                        ? "arrow.up.circle"
+                        : "puzzlepiece"
+                )
+
+                Text(related.name)
+                    .font(.caption.weight(.medium))
+
+                Spacer()
+
+                Text(related.effectiveContentKind.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Linked Base Game: \(baseGame.name)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Text(
+                "CNMT Title ID: \(metadata[related.id]?.titleID ?? "Not available")"
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+
+            Text(
+                "Relationship type: \(related.effectiveContentKind.displayName)"
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(
+            Color.secondary.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+    }
+
+    private func gameRow(at index: Int) -> some View {
+        let game = games[index]
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(game.name)
+                .font(.headline)
+
+            Text(game.fileURL.pathExtension.uppercased())
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text("Classification: \(game.effectiveContentKind.displayName)")
+                .font(.caption)
+
+            if game.effectiveContentKind == .update ||
+               game.effectiveContentKind == .downloadableContent {
+                let baseGames = games.filter {
+                    $0.effectiveContentKind == .baseGame &&
+                    $0.id != game.id
+                }
+
+                Picker(
+                    "Linked Base Game",
+                    selection: relationshipBinding(at: index)
+                ) {
+                    Text("Not linked")
+                        .tag(Optional<UUID>.none)
+
+                    ForEach(baseGames) { baseGame in
+                        Text(baseGame.name)
+                            .tag(Optional(baseGame.id))
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            if let result = metadata[game.id] {
+                Divider()
+
+                Text("Game Metadata")
+                    .font(.subheadline.weight(.semibold))
+
+                metadataLine("NCA Program ID", result.programID)
+                metadataLine("CNMT Title ID", result.titleID)
+
+                metadataLine(
+                    "CNMT application version (raw)",
+                    result.applicationVersion.map(String.init)
+                )
+
+                metadataLine(
+                    "CNMT content type",
+                    result.contentType.map {
+                        String(format: "0x%02X", $0)
+                    }
+                )
+
+                metadataLine(
+                    "CNMT content entries",
+                    String(result.contentCount)
+                )
+
+                metadataLine(
+                    "NCA files found",
+                    String(result.ncaCount)
+                )
+
+                metadataLine(
+                    "Plaintext CNMT files",
+                    String(result.plaintextCNMTCount)
+                )
+
+                metadataLine(
+                    "Encrypted CNMT containers",
+                    String(result.encryptedCNMTCount)
+                )
+
+                Divider()
+
+                if let suggestion = result.suggestedKind {
+                    Text("Suggested classification: \(suggestion.displayName)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.cyan)
+
+                    Text(result.suggestionExplanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if game.effectiveContentKind != suggestion {
+                        Button {
+                            games[index].contentKind = suggestion
+                            ImportedGame.save(games)
+                        } label: {
+                            Label(
+                                "Apply \(suggestion.displayName) Suggestion",
+                                systemImage: "checkmark.circle"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                } else {
+                    Text("No classification suggestion")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text(result.suggestionExplanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(result.status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                scanMetadata(for: game)
+            } label: {
+                if scanning.contains(game.id) {
+                    Label("Scanning Metadata...", systemImage: "hourglass")
+                } else {
+                    Label(
+                        "Scan Game Metadata",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(scanning.contains(game.id))
+
+            Picker(
+                "Classification",
+                selection: classificationBinding(at: index)
+            ) {
+                Text("Unclassified").tag(GameContentKind.unknown)
+                Text("Base Game").tag(GameContentKind.baseGame)
+                Text("Update").tag(GameContentKind.update)
+                Text("DLC").tag(GameContentKind.downloadableContent)
+            }
+            .pickerStyle(.menu)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func relationshipBinding(
+        at index: Int
+    ) -> Binding<UUID?> {
+        Binding(
+            get: {
+                games[index].baseGameID
+            },
+            set: { newID in
+                games[index].baseGameID = newID
+                ImportedGame.save(games)
+            }
+        )
+    }
+
+    private func metadataLine(
+        _ label: String,
+        _ value: String?
+    ) -> some View {
+        HStack(alignment: .top) {
+            Text(label + ":")
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Text(value ?? "Not detected")
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+        .font(.caption)
+    }
+
+    private func classificationBinding(
+        at index: Int
+    ) -> Binding<GameContentKind> {
+        Binding(
+            get: {
+                games[index].effectiveContentKind
+            },
+            set: { newKind in
+                games[index].contentKind =
+                    newKind == .unknown ? nil : newKind
+
+                ImportedGame.save(games)
+            }
+        )
+    }
+
+    private func scanMetadata(for game: ImportedGame) {
+        guard !scanning.contains(game.id) else { return }
+
+        scanning.insert(game.id)
+
+        DispatchQueue.global(qos: .utility).async {
+            let documents = FileManager.default.urls(
+                for: .documentDirectory,
+                in: .userDomainMask
+            )[0]
+
+            let folder = documents
+                .appendingPathComponent(
+                    "NxNativeExtracted",
+                    isDirectory: true
+                )
+                .appendingPathComponent(
+                    game.id.uuidString,
+                    isDirectory: true
+                )
+
+            var foundProgramID: String?
+            var foundTitleID: String?
+            var foundVersion: UInt32?
+            var foundContentType: UInt8?
+            var foundContentCount = 0
+
+            var ncaCount = 0
+            var plaintextCNMTCount = 0
+            var encryptedCNMTCount = 0
+
+            var status = "Metadata scan finished."
+
+            do {
+                guard FileManager.default.fileExists(
+                    atPath: folder.path
+                ) else {
+                    throw CocoaError(.fileNoSuchFile)
+                }
+
+                guard let enumerator = FileManager.default.enumerator(
+                    at: folder,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    throw CocoaError(.fileReadUnknown)
+                }
+
+                var ncaFiles: [URL] = []
+                var cnmtFiles: [URL] = []
+
+                for case let file as URL in enumerator {
+                    let values = try? file.resourceValues(
+                        forKeys: [.isRegularFileKey]
+                    )
+
+                    guard values?.isRegularFile == true else {
+                        continue
+                    }
+
+                    let fileName = file.lastPathComponent.lowercased()
+                    let extensionName = file.pathExtension.lowercased()
+
+                    if extensionName == "nca" {
+                        ncaFiles.append(file)
+
+                        if fileName.hasSuffix(".cnmt.nca") {
+                            encryptedCNMTCount += 1
+                        }
+                    }
+
+                    if extensionName == "cnmt" {
+                        cnmtFiles.append(file)
+                    }
+                }
+
+                ncaCount = ncaFiles.count
+                plaintextCNMTCount = cnmtFiles.count
+
+                for file in ncaFiles {
+                    let inspection = NCAInspector.inspect(file)
+
+                    if inspection.isRecognized,
+                       let programID = inspection.programID {
+                        foundProgramID = programID
+                        break
+                    }
+                }
+
+                for file in cnmtFiles {
+                    let inspection = CNMTInspector.inspect(file)
+
+                    if inspection.isRecognized {
+                        foundTitleID = inspection.titleID
+                        foundVersion = inspection.version
+                        foundContentType = inspection.contentType
+                        foundContentCount = inspection.contentCount ?? 0
+                        break
+                    }
+                }
+
+                if ncaFiles.isEmpty && cnmtFiles.isEmpty {
+                    status = "No extracted NCA or plaintext CNMT files found."
+                } else if foundProgramID == nil && foundTitleID == nil {
+                    if encryptedCNMTCount > 0 {
+                        status = "Encrypted CNMT containers found. Their metadata is not decrypted or parsed."
+                    } else {
+                        status = "Files found, but readable metadata was not recognized."
+                    }
+                } else if encryptedCNMTCount > 0 {
+                    status = "Readable metadata found. Encrypted CNMT containers were detected but not parsed."
+                } else {
+                    status = "Readable metadata found in extracted files."
+                }
+
+            } catch {
+                status = "No extracted metadata folder found. Inspect and extract game files first."
+            }
+
+            let result = LibraryMetadata(
+                programID: foundProgramID,
+                titleID: foundTitleID,
+                applicationVersion: foundVersion,
+                contentType: foundContentType,
+                contentCount: foundContentCount,
+                ncaCount: ncaCount,
+                plaintextCNMTCount: plaintextCNMTCount,
+                encryptedCNMTCount: encryptedCNMTCount,
+                status: status
+            )
+
+            DispatchQueue.main.async {
+                metadata[game.id] = result
+                saveMetadata()
+                scanning.remove(game.id)
+            }
+        }
     }
 }
