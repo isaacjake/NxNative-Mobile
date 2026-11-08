@@ -1,5 +1,11 @@
-
 import SwiftUI
+
+private struct SavedNCASectionResult: Identifiable {
+    let id: String
+    let fileName: String
+    let sectionNumber: Int
+    let inspection: NCASectionInspection
+}
 
 struct GamesView: View {
     let games: [ImportedGame]
@@ -17,6 +23,10 @@ struct GamesView: View {
     @State private var cnmtMessages: [String: String] = [:]
     @State private var extractionProgress: [String: Double] = [:]
     @State private var extractionBytes: [String: UInt64] = [:]
+
+    @State private var savedSectionResults: [UUID: [SavedNCASectionResult]] = [:]
+    @State private var savedSectionScanMessages: [UUID: String] = [:]
+    @State private var scanningSavedNCAs: Set<UUID> = []
 
     var body: some View {
         NavigationStack {
@@ -59,6 +69,28 @@ struct GamesView: View {
                                     Label("Inspect Game File", systemImage: "doc.text.magnifyingglass")
                                 }
                                 .buttonStyle(.bordered)
+
+                                Button {
+                                    inspectSavedNCAs(for: game)
+                                } label: {
+                                    if scanningSavedNCAs.contains(game.id) {
+                                        Label("Scanning Saved Files...", systemImage: "hourglass")
+                                    } else {
+                                        Label("Inspect Saved NCA Files", systemImage: "folder.badge.magnifyingglass")
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(scanningSavedNCAs.contains(game.id))
+
+                                if let message = savedSectionScanMessages[game.id] {
+                                    Text(message)
+                                        .font(.caption)
+                                        .foregroundStyle(message.hasPrefix("Scan complete") ? .green : .orange)
+                                }
+
+                                if let results = savedSectionResults[game.id] {
+                                    savedNCAResultsCard(results)
+                                }
 
                                 if let result = inspectionResults[game.id] {
                                     VStack(alignment: .leading, spacing: 5) {
@@ -195,6 +227,170 @@ struct GamesView: View {
                         Image(systemName: "plus")
                     }
                     .accessibilityLabel("Import games")
+                }
+            }
+        }
+    }
+
+    private func savedNCAResultsCard(
+        _ results: [SavedNCASectionResult]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Saved NCA Section Inspection")
+                .font(.headline)
+
+            ForEach(results) { item in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.fileName)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+
+                    Text("Section \(item.sectionNumber)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Label(
+                        item.inspection.isRecognized ? "PFS0 Directory Recognized" : "Directory Not Recognized",
+                        systemImage: item.inspection.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(item.inspection.isRecognized ? .green : .orange)
+
+                    Text(item.inspection.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !item.inspection.entries.isEmpty {
+                        Text("\(item.inspection.entries.count) directory entries")
+                            .font(.caption)
+                            .fontWeight(.medium)
+
+                        ForEach(Array(item.inspection.entries.prefix(50))) { entry in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.name)
+                                    .font(.caption)
+
+                                Text(
+                                    ByteCountFormatter.string(
+                                        fromByteCount: Int64(clamping: entry.size),
+                                        countStyle: .file
+                                    )
+                                )
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            }
+                            .padding(.leading, 8)
+                        }
+
+                        if item.inspection.entries.count > 50 {
+                            Text("Showing the first 50 entries.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cyan.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func inspectSavedNCAs(for game: ImportedGame) {
+        guard !scanningSavedNCAs.contains(game.id) else {
+            return
+        }
+
+        scanningSavedNCAs.insert(game.id)
+        savedSectionResults.removeValue(forKey: game.id)
+        savedSectionScanMessages.removeValue(forKey: game.id)
+
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let documents = FileManager.default.urls(
+                    for: .documentDirectory,
+                    in: .userDomainMask
+                )[0]
+
+                let outputFolder = documents
+                    .appendingPathComponent("NxNativeExtracted", isDirectory: true)
+                    .appendingPathComponent(game.id.uuidString, isDirectory: true)
+
+                guard FileManager.default.fileExists(atPath: outputFolder.path) else {
+                    throw SavedNCAScanError.folderNotFound
+                }
+
+                let files = try FileManager.default.contentsOfDirectory(
+                    at: outputFolder,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                )
+
+                let ncaFiles = files
+                    .filter { $0.pathExtension.lowercased() == "nca" }
+                    .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+                guard !ncaFiles.isEmpty else {
+                    throw SavedNCAScanError.noNCAFiles
+                }
+
+                var foundResults: [SavedNCASectionResult] = []
+
+                for fileURL in ncaFiles {
+                    let nca = NCAInspector.inspect(fileURL)
+
+                    guard nca.isRecognized else {
+                        continue
+                    }
+
+                    for section in nca.sections {
+                        guard section.isValid,
+                              section.fsType == 1,
+                              section.encryptionType == 1 else {
+                            continue
+                        }
+
+                        let inspection =
+                            NCASectionInspector.inspectUnencryptedPartitionFS(
+                                fileURL,
+                                section: section
+                            )
+
+                        foundResults.append(
+                            SavedNCASectionResult(
+                                id: "\(fileURL.lastPathComponent)-\(section.index)",
+                                fileName: fileURL.lastPathComponent,
+                                sectionNumber: section.index + 1,
+                                inspection: inspection
+                            )
+                        )
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    savedSectionResults[game.id] = foundResults
+
+                    if foundResults.isEmpty {
+                        savedSectionScanMessages[game.id] =
+                            "Scan complete: no valid unencrypted PartitionFS sections were found in the saved NCA files."
+                    } else {
+                        savedSectionScanMessages[game.id] =
+                            "Scan complete: checked \(ncaFiles.count) saved NCA file(s)."
+                    }
+
+                    scanningSavedNCAs.remove(game.id)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    savedSectionScanMessages[game.id] =
+                        "Scan could not finish: \(error.localizedDescription)"
+
+                    scanningSavedNCAs.remove(game.id)
                 }
             }
         }
@@ -608,6 +804,8 @@ struct GamesView: View {
         inspectionResults.removeValue(forKey: game.id)
         archiveResults.removeValue(forKey: game.id)
         archiveErrors.removeValue(forKey: game.id)
+        savedSectionResults.removeValue(forKey: game.id)
+        savedSectionScanMessages.removeValue(forKey: game.id)
 
         let prefix = "\(game.id.uuidString)-"
 
@@ -637,6 +835,20 @@ struct GamesView: View {
 
         extractionBytes = extractionBytes.filter {
             !$0.key.hasPrefix(prefix)
+        }
+    }
+}
+
+private enum SavedNCAScanError: LocalizedError {
+    case folderNotFound
+    case noNCAFiles
+
+    var errorDescription: String? {
+        switch self {
+        case .folderNotFound:
+            return "The saved extraction folder for this imported game was not found."
+        case .noNCAFiles:
+            return "No saved NCA files were found in this game's extraction folder."
         }
     }
 }
