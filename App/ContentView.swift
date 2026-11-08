@@ -36,17 +36,23 @@ struct ContentView: View {
             }
             .tag(1)
 
+            SavedSectionFilesView()
+                .tabItem {
+                    Label("Saved Files", systemImage: "folder.fill")
+                }
+                .tag(2)
+
             BuildView()
                 .tabItem {
                     Label("Build", systemImage: "hammer.fill")
                 }
-                .tag(2)
+                .tag(3)
 
             OutputView()
                 .tabItem {
                     Label("Output", systemImage: "archivebox.fill")
                 }
-                .tag(3)
+                .tag(4)
         }
         .tint(.cyan)
         .fileImporter(
