@@ -19,25 +19,17 @@ private enum SavedFileFilter: String, CaseIterable, Identifiable {
 
     func matches(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
-
         switch self {
-        case .all:
-            return true
-        case .images:
-            return ["png", "gif", "jpg", "jpeg", "heic"].contains(ext)
-        case .videos:
-            return ["mp4", "mov", "m4v"].contains(ext)
-        case .documents:
-            return ["pdf", "txt", "json", "xml"].contains(ext)
+        case .all: return true
+        case .images: return ["png", "gif", "jpg", "jpeg", "heic"].contains(ext)
+        case .videos: return ["mp4", "mov", "m4v"].contains(ext)
+        case .documents: return ["pdf", "txt", "json", "xml"].contains(ext)
         }
     }
 }
 
 private enum SavedFileSort: String, CaseIterable, Identifiable {
-    case nameAscending
-    case nameDescending
-    case newest
-    case largest
+    case nameAscending, nameDescending, newest, largest
 
     var id: String { rawValue }
 
@@ -63,86 +55,54 @@ struct SavedSectionFilesView: View {
 
     private let supportedExtensions: Set<String> = [
         "png", "gif", "jpg", "jpeg", "heic",
-        "mp4", "mov", "m4v",
-        "txt", "json", "xml", "pdf"
+        "mp4", "mov", "m4v", "txt", "json", "xml", "pdf"
     ]
 
     private var allFiles: [SavedSectionFile] {
         groups.flatMap { $0.files }
     }
 
-    private var imageFiles: [SavedSectionFile] {
-        allFiles.filter { SavedFileFilter.images.matches($0.url) }
+    private func files(for filter: SavedFileFilter) -> [SavedSectionFile] {
+        allFiles.filter { filter.matches($0.url) }
     }
 
-    private var videoFiles: [SavedSectionFile] {
-        allFiles.filter { SavedFileFilter.videos.matches($0.url) }
+    private func bytes(for files: [SavedSectionFile]) -> Int64 {
+        files.reduce(Int64(0)) { $0 + $1.sizeBytes }
     }
 
-    private var documentFiles: [SavedSectionFile] {
-        allFiles.filter { SavedFileFilter.documents.matches($0.url) }
-    }
-
-    private var totalBytes: Int64 {
-        allFiles.reduce(Int64(0)) { $0 + $1.sizeBytes }
-    }
-
-    private var imageBytes: Int64 {
-        imageFiles.reduce(Int64(0)) { $0 + $1.sizeBytes }
-    }
-
-    private var videoBytes: Int64 {
-        videoFiles.reduce(Int64(0)) { $0 + $1.sizeBytes }
-    }
-
-    private var documentBytes: Int64 {
-        documentFiles.reduce(Int64(0)) { $0 + $1.sizeBytes }
-    }
+    private var imageFiles: [SavedSectionFile] { files(for: .images) }
+    private var videoFiles: [SavedSectionFile] { files(for: .videos) }
+    private var documentFiles: [SavedSectionFile] { files(for: .documents) }
+    private var totalBytes: Int64 { bytes(for: allFiles) }
 
     private var filteredGroups: [SavedFileGroup] {
         groups.compactMap { group in
-            let query = searchText.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            let files = group.files.filter { file in
-                let matchesSearch =
-                    query.isEmpty ||
+            let matching = group.files.filter { file in
+                let matchesSearch = query.isEmpty ||
                     file.url.lastPathComponent.localizedCaseInsensitiveContains(query) ||
                     group.gameName.localizedCaseInsensitiveContains(query)
 
                 return selectedFilter.matches(file.url) && matchesSearch
             }
 
-            guard !files.isEmpty else {
-                return nil
-            }
+            guard !matching.isEmpty else { return nil }
 
-            let sortedFiles = files.sorted { first, second in
+            let sorted = matching.sorted { first, second in
                 switch selectedSort {
                 case .nameAscending:
-                    return first.url.lastPathComponent.localizedCaseInsensitiveCompare(
-                        second.url.lastPathComponent
-                    ) == .orderedAscending
-
+                    return first.url.lastPathComponent.localizedCaseInsensitiveCompare(second.url.lastPathComponent) == .orderedAscending
                 case .nameDescending:
-                    return first.url.lastPathComponent.localizedCaseInsensitiveCompare(
-                        second.url.lastPathComponent
-                    ) == .orderedDescending
-
+                    return first.url.lastPathComponent.localizedCaseInsensitiveCompare(second.url.lastPathComponent) == .orderedDescending
                 case .newest:
                     return first.creationDate > second.creationDate
-
                 case .largest:
                     return first.sizeBytes > second.sizeBytes
                 }
             }
 
-            return SavedFileGroup(
-                id: group.id,
-                gameName: group.gameName,
-                files: sortedFiles
-            )
+            return SavedFileGroup(id: group.id, gameName: group.gameName, files: sorted)
         }
     }
 
@@ -153,43 +113,16 @@ struct SavedSectionFilesView: View {
                     ContentUnavailableView(
                         "No Saved Section Files",
                         systemImage: "folder",
-                        description: Text(
-                            "Supported saved files will appear here."
-                        )
+                        description: Text("Supported saved files will appear here.")
                     )
                 } else {
                     VStack(spacing: 0) {
                         ScrollView {
                             dashboard
                         }
-                        .frame(maxHeight: 250)
+                        .frame(maxHeight: 390)
 
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(.secondary)
-
-                            TextField(
-                                "Search files or games",
-                                text: $searchText
-                            )
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                            if !searchText.isEmpty {
-                                Button {
-                                    searchText = ""
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .accessibilityLabel("Clear search")
-                            }
-                        }
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .padding(.horizontal)
-                        .padding(.top, 10)
+                        searchBar
 
                         Picker("File Type", selection: $selectedFilter) {
                             ForEach(SavedFileFilter.allCases) { filter in
@@ -200,37 +133,13 @@ struct SavedSectionFilesView: View {
                         .padding(.horizontal)
                         .padding(.top, 10)
 
-                        HStack {
-                            Text("Sort by")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-
-                            Spacer()
-
-                            Menu {
-                                Picker("Sort by", selection: $selectedSort) {
-                                    ForEach(SavedFileSort.allCases) { sort in
-                                        Text(sort.title).tag(sort)
-                                    }
-                                }
-                            } label: {
-                                Label(
-                                    selectedSort.title,
-                                    systemImage: "arrow.up.arrow.down"
-                                )
-                                .font(.subheadline)
-                            }
-                        }
-                        .padding(.horizontal)
-                        .padding(.vertical, 10)
+                        sortMenu
 
                         if filteredGroups.isEmpty {
                             ContentUnavailableView(
                                 "No Matching Files",
                                 systemImage: "magnifyingglass",
-                                description: Text(
-                                    "Try another search or file category."
-                                )
+                                description: Text("Try another search or file category.")
                             )
                         } else {
                             List {
@@ -257,9 +166,7 @@ struct SavedSectionFilesView: View {
                     .accessibilityLabel("Refresh saved files")
                 }
             }
-            .onAppear {
-                loadFiles()
-            }
+            .onAppear { loadFiles() }
             .sheet(item: $previewItem) { item in
                 NavigationStack {
                     QuickLookPreviewController(url: item.url)
@@ -268,19 +175,14 @@ struct SavedSectionFilesView: View {
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .topBarTrailing) {
-                                Button("Done") {
-                                    previewItem = nil
-                                }
+                                Button("Done") { previewItem = nil }
                             }
                         }
                 }
             }
             .sheet(item: $detailItem) { item in
                 NavigationStack {
-                    FileDetailsView(
-                        url: item.url,
-                        gameName: item.gameName
-                    )
+                    FileDetailsView(url: item.url, gameName: item.gameName)
                 }
             }
             .confirmationDialog(
@@ -294,14 +196,11 @@ struct SavedSectionFilesView: View {
                 Button("Delete File", role: .destructive) {
                     deletePendingFile()
                 }
-
                 Button("Cancel", role: .cancel) {
                     pendingDelete = nil
                 }
             } message: {
-                Text(
-                    "This removes the saved copy from NxNative. Your original NSP or XCI game file will not be affected."
-                )
+                Text("This removes the saved copy from NxNative. Your original NSP or XCI game file will not be affected.")
             }
             .alert(
                 "File Error",
@@ -310,13 +209,60 @@ struct SavedSectionFilesView: View {
                     set: { if !$0 { errorMessage = nil } }
                 )
             ) {
-                Button("OK", role: .cancel) {
-                    errorMessage = nil
-                }
+                Button("OK", role: .cancel) { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "Unknown error")
             }
         }
+    }
+
+    private var searchBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("Search files or games", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal)
+        .padding(.top, 10)
+    }
+
+    private var sortMenu: some View {
+        HStack {
+            Text("Sort by")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Menu {
+                Picker("Sort by", selection: $selectedSort) {
+                    ForEach(SavedFileSort.allCases) { sort in
+                        Text(sort.title).tag(sort)
+                    }
+                }
+            } label: {
+                Label(selectedSort.title, systemImage: "arrow.up.arrow.down")
+                    .font(.subheadline)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
     }
 
     private var dashboard: some View {
@@ -334,10 +280,7 @@ struct SavedSectionFilesView: View {
 
                 dashboardCard(
                     title: "Storage Used",
-                    value: ByteCountFormatter.string(
-                        fromByteCount: totalBytes,
-                        countStyle: .file
-                    ),
+                    value: formattedBytes(totalBytes),
                     subtitle: "Combined size",
                     symbol: "internaldrive"
                 )
@@ -346,26 +289,26 @@ struct SavedSectionFilesView: View {
             Text("By Category")
                 .font(.subheadline.weight(.semibold))
 
-            categoryRow(
-                title: "Images",
-                count: imageFiles.count,
-                bytes: imageBytes,
-                symbol: "photo"
-            )
+            categoryRow(title: "Images", count: imageFiles.count, bytes: bytes(for: imageFiles), symbol: "photo")
+            categoryRow(title: "Videos", count: videoFiles.count, bytes: bytes(for: videoFiles), symbol: "video")
+            categoryRow(title: "Documents", count: documentFiles.count, bytes: bytes(for: documentFiles), symbol: "doc.text")
 
-            categoryRow(
-                title: "Videos",
-                count: videoFiles.count,
-                bytes: videoBytes,
-                symbol: "video"
-            )
+            Divider()
 
-            categoryRow(
-                title: "Documents",
-                count: documentFiles.count,
-                bytes: documentBytes,
-                symbol: "doc.text"
-            )
+            HStack {
+                Text("Storage by Game")
+                    .font(.headline)
+
+                Spacer()
+
+                Text("\(groups.count) games")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(groups) { group in
+                gameStorageRow(group)
+            }
         }
         .padding()
     }
@@ -414,16 +357,54 @@ struct SavedSectionFilesView: View {
 
             Spacer()
 
-            Text(
-                ByteCountFormatter.string(
-                    fromByteCount: bytes,
-                    countStyle: .file
-                )
-            )
-            .foregroundStyle(.secondary)
-            .font(.subheadline)
+            Text(formattedBytes(bytes))
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
         }
         .font(.subheadline)
+    }
+
+    private func gameStorageRow(_ group: SavedFileGroup) -> some View {
+        let count = group.files.count
+        let size = group.files.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let percentage = totalBytes > 0
+            ? min(1.0, Double(size) / Double(totalBytes))
+            : 0
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(group.gameName, systemImage: "gamecontroller")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(formattedBytes(size))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.15))
+
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: geometry.size.width * percentage)
+                }
+            }
+            .frame(height: 7)
+
+            Text("\(count) saved \(count == 1 ? "file" : "files")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func formattedBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     private func fileRow(
@@ -454,10 +435,7 @@ struct SavedSectionFilesView: View {
                     .buttonStyle(.bordered)
 
                     Button {
-                        detailItem = FileDetailItem(
-                            url: file.url,
-                            gameName: gameName
-                        )
+                        detailItem = FileDetailItem(url: file.url, gameName: gameName)
                     } label: {
                         Label("Details", systemImage: "info.circle")
                     }
@@ -515,54 +493,32 @@ struct SavedSectionFilesView: View {
             var loadedGroups: [SavedFileGroup] = []
 
             for folder in folders {
-                let values = try folder.resourceValues(
-                    forKeys: [.isDirectoryKey]
-                )
-
-                guard values.isDirectory == true else {
-                    continue
-                }
+                let values = try folder.resourceValues(forKeys: [.isDirectoryKey])
+                guard values.isDirectory == true else { continue }
 
                 let contents = try FileManager.default.contentsOfDirectory(
                     at: folder,
-                    includingPropertiesForKeys: [
-                        .isRegularFileKey,
-                        .creationDateKey
-                    ],
+                    includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey],
                     options: [.skipsHiddenFiles]
                 )
 
-                let savedFiles = contents.compactMap {
-                    url -> SavedSectionFile? in
-
+                let savedFiles = contents.compactMap { url -> SavedSectionFile? in
                     let ext = url.pathExtension.lowercased()
+                    guard supportedExtensions.contains(ext) else { return nil }
 
-                    guard supportedExtensions.contains(ext) else {
-                        return nil
-                    }
-
-                    let attributes = try? FileManager.default.attributesOfItem(
-                        atPath: url.path
-                    )
-
-                    let bytes = (
-                        attributes?[.size] as? NSNumber
-                    )?.int64Value ?? 0
-
-                    let creationDate = (
-                        attributes?[.creationDate] as? Date
-                    ) ?? .distantPast
+                    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                    let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+                    let date = (attributes?[.creationDate] as? Date) ?? .distantPast
 
                     return SavedSectionFile(
                         url: url,
-                        sizeBytes: bytes,
-                        creationDate: creationDate
+                        sizeBytes: size,
+                        creationDate: date
                     )
                 }
 
                 if !savedFiles.isEmpty {
                     let folderID = folder.lastPathComponent.lowercased()
-
                     loadedGroups.append(
                         SavedFileGroup(
                             id: folderID,
@@ -574,19 +530,15 @@ struct SavedSectionFilesView: View {
             }
 
             groups = loadedGroups.sorted {
-                $0.gameName.localizedCaseInsensitiveCompare($1.gameName)
-                    == .orderedAscending
+                $0.gameName.localizedCaseInsensitiveCompare($1.gameName) == .orderedAscending
             }
-
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func deletePendingFile() {
-        guard let file = pendingDelete else {
-            return
-        }
+        guard let file = pendingDelete else { return }
 
         do {
             try FileManager.default.removeItem(at: file.url)
@@ -606,10 +558,7 @@ private struct FileDetailsView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var fileBytes: Int64 {
-        let attributes = try? FileManager.default.attributesOfItem(
-            atPath: url.path
-        )
-
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
@@ -617,20 +566,11 @@ private struct FileDetailsView: View {
         List {
             Section("File") {
                 detailRow("File name", value: url.lastPathComponent)
-
-                detailRow(
-                    "Format",
-                    value: SavedSectionFile.formatName(for: url)
-                )
-
+                detailRow("Format", value: SavedSectionFile.formatName(for: url))
                 detailRow(
                     "Size",
-                    value: ByteCountFormatter.string(
-                        fromByteCount: fileBytes,
-                        countStyle: .file
-                    )
+                    value: ByteCountFormatter.string(fromByteCount: fileBytes, countStyle: .file)
                 )
-
                 detailRow("Exact size", value: "\(fileBytes) bytes")
             }
 
@@ -639,20 +579,13 @@ private struct FileDetailsView: View {
             }
 
             Section("Storage") {
-                detailRow(
-                    "Folder",
-                    value: url.deletingLastPathComponent().lastPathComponent
-                )
-
+                detailRow("Folder", value: url.deletingLastPathComponent().lastPathComponent)
                 detailRow("File location", value: url.path)
             }
 
             Section {
                 ShareLink(item: url) {
-                    Label(
-                        "Share This File",
-                        systemImage: "square.and.arrow.up"
-                    )
+                    Label("Share This File", systemImage: "square.and.arrow.up")
                 }
             }
         }
@@ -660,9 +593,7 @@ private struct FileDetailsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") {
-                    dismiss()
-                }
+                Button("Done") { dismiss() }
             }
         }
     }
@@ -729,10 +660,7 @@ private struct SavedSectionFile: Identifiable {
     var id: String { url.path }
 
     var size: String {
-        ByteCountFormatter.string(
-            fromByteCount: sizeBytes,
-            countStyle: .file
-        )
+        ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
     }
 
     var format: String {
@@ -796,9 +724,7 @@ private struct QuickLookPreviewController: UIViewControllerRepresentable {
             self.url = url
         }
 
-        func numberOfPreviewItems(
-            in controller: QLPreviewController
-        ) -> Int {
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
             1
         }
 
