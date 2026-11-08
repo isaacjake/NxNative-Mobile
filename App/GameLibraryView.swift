@@ -10,6 +10,21 @@ private struct LibraryMetadata {
     var plaintextCNMTCount: Int
     var encryptedCNMTCount: Int
     var status: String
+
+    var suggestedKind: GameContentKind? {
+        guard let contentType else { return nil }
+
+        switch contentType {
+        case 0:
+            return .baseGame
+        case 1:
+            return .update
+        case 2:
+            return .downloadableContent
+        default:
+            return nil
+        }
+    }
 }
 
 struct GameLibraryView: View {
@@ -88,14 +103,41 @@ struct GameLibraryView: View {
                 )
 
                 metadataLine("NCA files found", String(result.ncaCount))
+
                 metadataLine(
                     "Plaintext CNMT files",
                     String(result.plaintextCNMTCount)
                 )
+
                 metadataLine(
                     "Encrypted CNMT containers",
                     String(result.encryptedCNMTCount)
                 )
+
+                if let suggestion = result.suggestedKind {
+                    Divider()
+
+                    Text("Suggested classification: \(suggestion.displayName)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.cyan)
+
+                    Text("Based on the readable CNMT content type. This is a suggestion, not automatic verification.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if game.effectiveContentKind != suggestion {
+                        Button {
+                            games[index].contentKind = suggestion
+                            ImportedGame.save(games)
+                        } label: {
+                            Label(
+                                "Apply \(suggestion.displayName) Suggestion",
+                                systemImage: "checkmark.circle"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
 
                 Text(result.status)
                     .font(.caption)
