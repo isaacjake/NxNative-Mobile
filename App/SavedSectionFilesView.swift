@@ -6,6 +6,7 @@ import UIKit
 struct SavedSectionFilesView: View {
     @State private var groups: [SavedFileGroup] = []
     @State private var previewItem: PreviewItem?
+    @State private var detailItem: FileDetailItem?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -47,13 +48,21 @@ struct SavedSectionFilesView: View {
                                                 }
                                                 .buttonStyle(.bordered)
 
-                                                ShareLink(item: file.url) {
-                                                    Label(
-                                                        "Share",
-                                                        systemImage: "square.and.arrow.up"
+                                                Button {
+                                                    detailItem = FileDetailItem(
+                                                        url: file.url,
+                                                        gameName: group.gameName
                                                     )
+                                                } label: {
+                                                    Label("Details", systemImage: "info.circle")
                                                 }
                                                 .buttonStyle(.bordered)
+
+                                                ShareLink(item: file.url) {
+                                                    Image(systemName: "square.and.arrow.up")
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .accessibilityLabel("Share file")
                                             }
                                         }
                                     }
@@ -91,6 +100,14 @@ struct SavedSectionFilesView: View {
                                 }
                             }
                         }
+                }
+            }
+            .sheet(item: $detailItem) { item in
+                NavigationStack {
+                    FileDetailsView(
+                        url: item.url,
+                        gameName: item.gameName
+                    )
                 }
             }
             .alert(
@@ -206,6 +223,86 @@ struct SavedSectionFilesView: View {
     }
 }
 
+private struct FileDetailsView: View {
+    let url: URL
+    let gameName: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var fileBytes: Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(
+            atPath: url.path
+        )
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    private var format: String {
+        switch url.pathExtension.lowercased() {
+        case "png": return "PNG Image"
+        case "gif": return "GIF Image"
+        default: return "Unknown"
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("File") {
+                detailRow("File name", value: url.lastPathComponent)
+                detailRow("Format", value: format)
+                detailRow("Size", value: ByteCountFormatter.string(
+                    fromByteCount: fileBytes,
+                    countStyle: .file
+                ))
+                detailRow("Exact size", value: "\(fileBytes) bytes")
+            }
+
+            Section("Game") {
+                detailRow("Game name", value: gameName)
+            }
+
+            Section("Storage") {
+                detailRow(
+                    "Folder",
+                    value: url.deletingLastPathComponent().lastPathComponent
+                )
+
+                detailRow(
+                    "File location",
+                    value: url.path
+                )
+            }
+
+            Section {
+                ShareLink(item: url) {
+                    Label("Share This File", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
+        .navigationTitle("File Details")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func detailRow(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.body)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
 private struct SavedFileThumbnail: View {
     let url: URL
 
@@ -252,6 +349,12 @@ private struct SavedSectionFile: Identifiable {
 
 private struct PreviewItem: Identifiable {
     let url: URL
+    var id: String { url.path }
+}
+
+private struct FileDetailItem: Identifiable {
+    let url: URL
+    let gameName: String
     var id: String { url.path }
 }
 
