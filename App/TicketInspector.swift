@@ -24,21 +24,13 @@ enum TicketInspector {
                 )
             }
 
-            guard fileSize == 704 else {
-                return TicketInspection(
-                    fileSize: fileSize,
-                    isRecognized: false,
-                    message: "Unexpected ticket size. Inspection limited."
-                )
-            }
-
             let data = try Data(contentsOf: url)
 
             guard data.count >= 4 else {
                 return TicketInspection(
                     fileSize: fileSize,
                     isRecognized: false,
-                    message: "Ticket is too small to inspect."
+                    message: "File is too small to inspect."
                 )
             }
 
@@ -69,17 +61,21 @@ enum TicketInspector {
                 return TicketInspection(
                     fileSize: fileSize,
                     isRecognized: false,
-                    message: String(
-                        format: "Unknown signature type: 0x%08X",
-                        signatureType
-                    )
+                    message: "Unknown signature type."
                 )
             }
 
+            let expectedSize = 1024
+
             return TicketInspection(
                 fileSize: fileSize,
-                isRecognized: true,
-                message: "Signature metadata: \(signatureName). Secret key material was not accessed."
+                isRecognized: false,
+                message: """
+                Signature metadata recognized: \(signatureName).
+                File size: \(fileSize) bytes.
+                Documented full ticket layout for this signature type: \(expectedSize) bytes.
+                Full ticket structure has not been validated. No secret key material was accessed.
+                """
             )
 
         } catch {
