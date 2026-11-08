@@ -89,6 +89,8 @@ struct GameLibraryView: View {
     var body: some View {
         NavigationStack {
             List {
+                relationshipSummarySection
+
                 relationshipsSection
 
                 ForEach(sections, id: \.kind) { section in
@@ -111,6 +113,83 @@ struct GameLibraryView: View {
             .navigationTitle("Library")
         }
     }
+
+    // MARK: - Library Summary
+
+    private var relationshipSummarySection: some View {
+        let baseCount = games.filter {
+            $0.effectiveContentKind == .baseGame
+        }.count
+
+        let linkedUpdates = games.filter {
+            $0.effectiveContentKind == .update &&
+            $0.baseGameID != nil
+        }.count
+
+        let linkedDLC = games.filter {
+            $0.effectiveContentKind == .downloadableContent &&
+            $0.baseGameID != nil
+        }.count
+
+        let unlinkedUpdates = games.filter {
+            $0.effectiveContentKind == .update &&
+            $0.baseGameID == nil
+        }.count
+
+        let unlinkedDLC = games.filter {
+            $0.effectiveContentKind == .downloadableContent &&
+            $0.baseGameID == nil
+        }.count
+
+        return Section("Library Summary") {
+            summaryRow(
+                "Base Games",
+                count: baseCount,
+                icon: "gamecontroller.fill"
+            )
+
+            summaryRow(
+                "Linked Updates",
+                count: linkedUpdates,
+                icon: "arrow.up.circle"
+            )
+
+            summaryRow(
+                "Linked DLC",
+                count: linkedDLC,
+                icon: "puzzlepiece"
+            )
+
+            summaryRow(
+                "Unlinked Updates",
+                count: unlinkedUpdates,
+                icon: "link"
+            )
+
+            summaryRow(
+                "Unlinked DLC",
+                count: unlinkedDLC,
+                icon: "link"
+            )
+        }
+    }
+
+    private func summaryRow(
+        _ title: String,
+        count: Int,
+        icon: String
+    ) -> some View {
+        HStack {
+            Label(title, systemImage: icon)
+
+            Spacer()
+
+            Text("\(count)")
+                .font(.headline.monospacedDigit())
+        }
+    }
+
+    // MARK: - Game Relationships
 
     private var relationshipsSection: some View {
         Section("Game Relationships") {
@@ -246,6 +325,8 @@ struct GameLibraryView: View {
             in: RoundedRectangle(cornerRadius: 8)
         )
     }
+
+    // MARK: - Game Rows
 
     private func gameRow(at index: Int) -> some View {
         let game = games[index]
@@ -390,6 +471,8 @@ struct GameLibraryView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Bindings
+
     private func relationshipBinding(
         at index: Int
     ) -> Binding<UUID?> {
@@ -436,6 +519,8 @@ struct GameLibraryView: View {
             }
         )
     }
+
+    // MARK: - Metadata Scanner
 
     private func scanMetadata(for game: ImportedGame) {
         guard !scanning.contains(game.id) else { return }
