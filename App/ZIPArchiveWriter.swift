@@ -1,359 +1,928 @@
+
+import SwiftUI
+import QuickLook
+import UIKit
 import Foundation
 
-struct ZIPArchiveItem {
-    let sourceURL: URL
-    let archivePath: String
-}
+private enum SavedFileFilter: String, CaseIterable, Identifiable {
+    case all, images, videos, documents
+    var id: String { rawValue }
 
-enum ZIPArchiveError: LocalizedError {
-    case noFiles
-    case tooManyFiles
-    case fileTooLarge(String)
-    case filenameTooLong(String)
-    case archiveTooLarge
-    case cannotCreateArchive
-
-    var errorDescription: String? {
+    var title: String {
         switch self {
-        case .noFiles:
-            return "No files were selected for the ZIP archive."
-        case .tooManyFiles:
-            return "The ZIP archive contains too many files."
-        case .fileTooLarge(let name):
-            return "\(name) is too large for this ZIP format."
-        case .filenameTooLong(let name):
-            return "The filename is too long: \(name)"
-        case .archiveTooLarge:
-            return "The ZIP archive exceeds the supported size."
-        case .cannotCreateArchive:
-            return "The ZIP archive could not be created."
+        case .all: return "All"
+        case .images: return "Images"
+        case .videos: return "Videos"
+        case .documents: return "Documents"
+        }
+    }
+
+    func matches(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        switch self {
+        case .all: return true
+        case .images: return ["png", "gif", "jpg", "jpeg", "heic"].contains(ext)
+        case .videos: return ["mp4", "mov", "m4v"].contains(ext)
+        case .documents: return ["pdf", "txt", "json", "xml"].contains(ext)
         }
     }
 }
 
-enum ZIPArchiveWriter {
+private enum SavedFileSort: String, CaseIterable, Identifiable {
+    case nameAscending, nameDescending, newest, largest
+    var id: String { rawValue }
 
-    private static let maximumZIP32Size: UInt64 = UInt64(UInt32.max)
-
-    static func create(items: [ZIPArchiveItem]) throws -> URL {
-        guard !items.isEmpty else {
-            throw ZIPArchiveError.noFiles
+    var title: String {
+        switch self {
+        case .nameAscending: return "Name (A–Z)"
+        case .nameDescending: return "Name (Z–A)"
+        case .newest: return "Newest First"
+        case .largest: return "Largest First"
         }
+    }
+}
 
-        guard items.count <= Int(UInt16.max) else {
-            throw ZIPArchiveError.tooManyFiles
+struct SavedSectionFilesView: View {
+    @State private var groups: [SavedFileGroup] = []
+    @State private var selectedFilter: SavedFileFilter = .all
+    @State private var selectedSort: SavedFileSort = .nameAscending
+    @State private var searchText = ""
+    @State private var previewItem: PreviewItem?
+    @State private var detailItem: FileDetailItem?
+    @State private var pendingDelete: SavedSectionFile?
+    @State private var errorMessage: String?
+
+    @State private var isSelectionMode = false
+    @State private var selectedFileIDs: Set<String> = []
+    @State private var isBulkDeleteConfirmationPresented = false
+    @State private var isBulkSharePresented = false
+    @State private var isCreatingZip = false
+    @State private var zipURL: URL?
+    @State private var isZipSharePresented = false
+
+    private let supportedExtensions: Set<String> = [
+        "png", "gif", "jpg", "jpeg", "heic",
+        "mp4", "mov", "m4v", "txt", "json", "xml", "pdf"
+    ]
+
+    private var allFiles: [SavedSectionFile] {
+        groups.flatMap { $0.files }
+    }
+
+    private var selectedFiles: [SavedSectionFile] {
+        allFiles.filter { selectedFileIDs.contains($0.id) }
+    }
+
+    private func files(for filter: SavedFileFilter) -> [SavedSectionFile] {
+        allFiles.filter { filter.matches($0.url) }
+    }
+
+    private func bytes(for files: [SavedSectionFile]) -> Int64 {
+        files.reduce(Int64(0)) { $0 + $1.sizeBytes }
+    }
+
+    private var imageFiles: [SavedSectionFile] { files(for: .images) }
+    private var videoFiles: [SavedSectionFile] { files(for: .videos) }
+    private var documentFiles: [SavedSectionFile] { files(for: .documents) }
+    private var totalBytes: Int64 { bytes(for: allFiles) }
+
+    private var filteredGroups: [SavedFileGroup] {
+        groups.compactMap { group in
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let matching = group.files.filter { file in
+                let matchesSearch = query.isEmpty ||
+                    file.url.lastPathComponent.localizedCaseInsensitiveContains(query) ||
+                    group.gameName.localizedCaseInsensitiveContains(query)
+
+                return selectedFilter.matches(file.url) && matchesSearch
+            }
+
+            guard !matching.isEmpty else { return nil }
+
+            let sorted = matching.sorted { first, second in
+                switch selectedSort {
+                case .nameAscending:
+                    return first.url.lastPathComponent.localizedCaseInsensitiveCompare(second.url.lastPathComponent) == .orderedAscending
+                case .nameDescending:
+                    return first.url.lastPathComponent.localizedCaseInsensitiveCompare(second.url.lastPathComponent) == .orderedDescending
+                case .newest:
+                    return first.creationDate > second.creationDate
+                case .largest:
+                    return first.sizeBytes > second.sizeBytes
+                }
+            }
+
+            return SavedFileGroup(id: group.id, gameName: group.gameName, files: sorted)
         }
+    }
 
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "NxNative-Saved-Files-\(UUID().uuidString.prefix(8)).zip"
-            )
+    var body: some View {
+        NavigationStack {
+            Group {
+                if groups.isEmpty {
+                    ContentUnavailableView(
+                        "No Saved Section Files",
+                        systemImage: "folder",
+                        description: Text("Supported saved files will appear here.")
+                    )
+                } else {
+                    VStack(spacing: 0) {
+                        ScrollView {
+                            dashboard
+                        }
+                        .frame(maxHeight: 390)
 
-        guard FileManager.default.createFile(
-            atPath: outputURL.path,
-            contents: nil
-        ) else {
-            throw ZIPArchiveError.cannotCreateArchive
+                        searchBar
+
+                        Picker("File Type", selection: $selectedFilter) {
+                            ForEach(SavedFileFilter.allCases) { filter in
+                                Text(filter.title).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+                        .padding(.top, 10)
+
+                        sortMenu
+
+                        if isSelectionMode {
+                            HStack {
+                                Text("\(selectedFileIDs.count) selected")
+                                    .font(.subheadline.weight(.semibold))
+
+                                Spacer()
+
+                                Button("Select All") {
+                                    selectAllVisibleFiles()
+                                }
+
+                                Button("Clear") {
+                                    selectedFileIDs.removeAll()
+                                }
+                                .disabled(selectedFileIDs.isEmpty)
+                            }
+                            .padding(.horizontal)
+                            .padding(.bottom, 8)
+                        }
+
+                        if filteredGroups.isEmpty {
+                            ContentUnavailableView(
+                                "No Matching Files",
+                                systemImage: "magnifyingglass",
+                                description: Text("Try another search or file category.")
+                            )
+                        } else {
+                            List {
+                                ForEach(filteredGroups) { group in
+                                    Section(group.gameName) {
+                                        ForEach(group.files) { file in
+                                            fileRow(file, gameName: group.gameName)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Saved Files")
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        loadFiles()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .accessibilityLabel("Refresh saved files")
+
+                    if !allFiles.isEmpty {
+                        Button(isSelectionMode ? "Cancel" : "Select") {
+                            toggleSelectionMode()
+                        }
+                    }
+
+                    if isSelectionMode && !selectedFileIDs.isEmpty {
+                        Button {
+                            isBulkSharePresented = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share selected files")
+
+                        Button {
+                            createZip()
+                        } label: {
+                            if isCreatingZip {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "archivebox")
+                            }
+                        }
+                        .disabled(isCreatingZip)
+                        .accessibilityLabel("Create ZIP archive")
+
+                        Button(role: .destructive) {
+                            isBulkDeleteConfirmationPresented = true
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .accessibilityLabel("Delete selected files")
+                    }
+                }
+            }
+            .onAppear { loadFiles() }
+            .sheet(item: $previewItem) { item in
+                NavigationStack {
+                    QuickLookPreviewController(url: item.url)
+                        .ignoresSafeArea(edges: .bottom)
+                        .navigationTitle(item.url.lastPathComponent)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { previewItem = nil }
+                            }
+                        }
+                }
+            }
+            .sheet(item: $detailItem) { item in
+                NavigationStack {
+                    FileDetailsView(url: item.url, gameName: item.gameName)
+                }
+            }
+            .sheet(isPresented: $isBulkSharePresented) {
+                MultiFileShareSheet(urls: selectedFiles.map { $0.url })
+            }
+            .sheet(isPresented: $isZipSharePresented) {
+                if let zipURL {
+                    MultiFileShareSheet(urls: [zipURL])
+                }
+            }
+            .confirmationDialog(
+                "Delete Saved File?",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete File", role: .destructive) {
+                    deletePendingFile()
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingDelete = nil
+                }
+            } message: {
+                Text("This removes the saved copy from NxNative. Your original NSP or XCI game file will not be affected.")
+            }
+            .confirmationDialog(
+                "Delete \(selectedFileIDs.count) Saved Files?",
+                isPresented: $isBulkDeleteConfirmationPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Delete \(selectedFileIDs.count) Files", role: .destructive) {
+                    deleteSelectedFiles()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Only the selected saved copies will be deleted. Original NSP and XCI files will not be affected.")
+            }
+            .alert(
+                "File Error",
+                isPresented: Binding(
+                    get: { errorMessage != nil },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "Unknown error")
+            }
         }
+    }
+
+    private func toggleSelectionMode() {
+        isSelectionMode.toggle()
+        if !isSelectionMode {
+            selectedFileIDs.removeAll()
+        }
+    }
+
+    private func selectAllVisibleFiles() {
+        for group in filteredGroups {
+            for file in group.files {
+                selectedFileIDs.insert(file.id)
+            }
+        }
+    }
+
+    private func toggleFileSelection(_ file: SavedSectionFile) {
+        if selectedFileIDs.contains(file.id) {
+            selectedFileIDs.remove(file.id)
+        } else {
+            selectedFileIDs.insert(file.id)
+        }
+    }
+
+    private func createZip() {
+        let files = selectedFiles
+        guard !files.isEmpty else { return }
+
+        isCreatingZip = true
 
         do {
-            let output = try FileHandle(forWritingTo: outputURL)
-            defer {
-                try? output.close()
-            }
+            let items = files.map { file -> ZIPArchiveItem in
+                let game = groups.first(where: {
+                    $0.files.contains(where: { $0.id == file.id })
+                })?.gameName ?? "Files"
 
-            var centralDirectory = Data()
-            var currentOffset: UInt64 = 0
-
-            for item in items {
-                let attributes = try FileManager.default.attributesOfItem(
-                    atPath: item.sourceURL.path
+                let safeGameName = game.replacingOccurrences(
+                    of: "/",
+                    with: "-"
                 )
 
-                let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+                return ZIPArchiveItem(
+                    sourceURL: file.url,
+                    archivePath: "\(safeGameName)/\(file.url.lastPathComponent)"
+                )
+            }
 
-                guard fileSize <= maximumZIP32Size else {
-                    throw ZIPArchiveError.fileTooLarge(
-                        item.sourceURL.lastPathComponent
+            let createdURL = try ZIPArchiveWriter.create(items: items)
+
+            zipURL = createdURL
+            isCreatingZip = false
+            isZipSharePresented = true
+        } catch {
+            isCreatingZip = false
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private var searchBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("Search files or games", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal)
+        .padding(.top, 10)
+    }
+
+    private var sortMenu: some View {
+        HStack {
+            Text("Sort by")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Menu {
+                Picker("Sort by", selection: $selectedSort) {
+                    ForEach(SavedFileSort.allCases) { sort in
+                        Text(sort.title).tag(sort)
+                    }
+                }
+            } label: {
+                Label(selectedSort.title, systemImage: "arrow.up.arrow.down")
+                    .font(.subheadline)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    private var dashboard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Storage Dashboard")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                dashboardCard(
+                    title: "Saved Files",
+                    value: "\(allFiles.count)",
+                    subtitle: "Total files",
+                    symbol: "doc.on.doc"
+                )
+
+                dashboardCard(
+                    title: "Storage Used",
+                    value: formattedBytes(totalBytes),
+                    subtitle: "Combined size",
+                    symbol: "internaldrive"
+                )
+            }
+
+            Text("By Category")
+                .font(.subheadline.weight(.semibold))
+
+            categoryRow(title: "Images", count: imageFiles.count, bytes: bytes(for: imageFiles), symbol: "photo")
+            categoryRow(title: "Videos", count: videoFiles.count, bytes: bytes(for: videoFiles), symbol: "video")
+            categoryRow(title: "Documents", count: documentFiles.count, bytes: bytes(for: documentFiles), symbol: "doc.text")
+
+            Divider()
+
+            HStack {
+                Text("Storage by Game")
+                    .font(.headline)
+                Spacer()
+                Text("\(groups.count) games")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(groups) { group in
+                gameStorageRow(group)
+            }
+        }
+        .padding()
+    }
+
+    private func dashboardCard(
+        title: String,
+        value: String,
+        subtitle: String,
+        symbol: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(title, systemImage: symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.title2.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color.secondary.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func categoryRow(
+        title: String,
+        count: Int,
+        bytes: Int64,
+        symbol: String
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .frame(width: 24)
+                .foregroundStyle(.secondary)
+
+            Text(title)
+            Text("(\(count))")
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Text(formattedBytes(bytes))
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+        }
+        .font(.subheadline)
+    }
+
+    private func gameStorageRow(_ group: SavedFileGroup) -> some View {
+        let count = group.files.count
+        let size = group.files.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let percentage = totalBytes > 0
+            ? min(1.0, Double(size) / Double(totalBytes))
+            : 0
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(group.gameName, systemImage: "gamecontroller")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(formattedBytes(size))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.15))
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: geometry.size.width * percentage)
+                }
+            }
+            .frame(height: 7)
+
+            Text("\(count) saved \(count == 1 ? "file" : "files")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func formattedBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func fileRow(_ file: SavedSectionFile, gameName: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            if isSelectionMode {
+                Button {
+                    toggleFileSelection(file)
+                } label: {
+                    Image(
+                        systemName: selectedFileIDs.contains(file.id)
+                            ? "checkmark.circle.fill"
+                            : "circle"
                     )
+                    .font(.title2)
+                    .foregroundStyle(
+                        selectedFileIDs.contains(file.id)
+                            ? Color.accentColor
+                            : Color.secondary
+                    )
+                    .frame(width: 28, height: 76)
                 }
-
-                let archiveName = item.archivePath
-                    .replacingOccurrences(of: "\\", with: "/")
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-
-                let filenameData = Data(archiveName.utf8)
-
-                guard !filenameData.isEmpty,
-                      filenameData.count <= Int(UInt16.max) else {
-                    throw ZIPArchiveError.filenameTooLong(archiveName)
-                }
-
-                guard currentOffset <= maximumZIP32Size else {
-                    throw ZIPArchiveError.archiveTooLarge
-                }
-
-                let checksum = try crc32(of: item.sourceURL)
-
-                let modifiedDate =
-                    attributes[.modificationDate] as? Date ?? Date()
-
-                let (dosTime, dosDate) = dosDateTime(modifiedDate)
-
-                let localHeader = makeLocalHeader(
-                    filename: filenameData,
-                    checksum: checksum,
-                    fileSize: UInt32(fileSize),
-                    dosTime: dosTime,
-                    dosDate: dosDate
-                )
-
-                let localHeaderOffset = UInt32(currentOffset)
-
-                try output.write(contentsOf: localHeader)
-                currentOffset += UInt64(localHeader.count)
-
-                try copyFile(
-                    from: item.sourceURL,
-                    to: output,
-                    expectedSize: fileSize
-                )
-
-                currentOffset += fileSize
-
-                guard currentOffset <= maximumZIP32Size else {
-                    throw ZIPArchiveError.archiveTooLarge
-                }
-
-                let centralHeader = makeCentralHeader(
-                    filename: filenameData,
-                    checksum: checksum,
-                    fileSize: UInt32(fileSize),
-                    dosTime: dosTime,
-                    dosDate: dosDate,
-                    localHeaderOffset: localHeaderOffset
-                )
-
-                centralDirectory.append(centralHeader)
+                .buttonStyle(.plain)
             }
 
-            guard currentOffset <= maximumZIP32Size,
-                  UInt64(centralDirectory.count) <= maximumZIP32Size else {
-                throw ZIPArchiveError.archiveTooLarge
+            SavedFileThumbnail(url: file.url)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(file.url.lastPathComponent)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                HStack(spacing: 10) {
+                    Text(file.format)
+                    Text(file.size)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                HStack {
+                    Button {
+                        previewItem = PreviewItem(url: file.url)
+                    } label: {
+                        Label("Preview", systemImage: "eye")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        detailItem = FileDetailItem(url: file.url, gameName: gameName)
+                    } label: {
+                        Label("Details", systemImage: "info.circle")
+                    }
+                    .buttonStyle(.bordered)
+
+                    ShareLink(item: file.url) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(role: .destructive) {
+                        pendingDelete = file
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func loadFiles() {
+        let documents = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0]
+
+        let root = documents.appendingPathComponent(
+            "NxNativeSectionFiles",
+            isDirectory: true
+        )
+
+        do {
+            guard FileManager.default.fileExists(atPath: root.path) else {
+                groups = []
+                selectedFileIDs.removeAll()
+                return
             }
 
-            let centralDirectoryOffset = UInt32(currentOffset)
-            let centralDirectorySize = UInt32(centralDirectory.count)
-
-            try output.write(contentsOf: centralDirectory)
-            currentOffset += UInt64(centralDirectory.count)
-
-            guard currentOffset <= maximumZIP32Size else {
-                throw ZIPArchiveError.archiveTooLarge
-            }
-
-            let endRecord = makeEndRecord(
-                fileCount: UInt16(items.count),
-                centralDirectorySize: centralDirectorySize,
-                centralDirectoryOffset: centralDirectoryOffset
+            let savedGames = ImportedGame.loadSaved()
+            let gameNames = Dictionary(
+                uniqueKeysWithValues: savedGames.map {
+                    ($0.id.uuidString.lowercased(), $0.name)
+                }
             )
 
-            try output.write(contentsOf: endRecord)
-            try output.synchronize()
+            let folders = try FileManager.default.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
 
-            return outputURL
+            var loadedGroups: [SavedFileGroup] = []
 
-        } catch {
-            try? FileManager.default.removeItem(at: outputURL)
-            throw error
-        }
-    }
+            for folder in folders {
+                let values = try folder.resourceValues(forKeys: [.isDirectoryKey])
+                guard values.isDirectory == true else { continue }
 
-    private static func copyFile(
-        from sourceURL: URL,
-        to destination: FileHandle,
-        expectedSize: UInt64
-    ) throws {
-        let input = try FileHandle(forReadingFrom: sourceURL)
-        defer {
-            try? input.close()
-        }
+                let contents = try FileManager.default.contentsOfDirectory(
+                    at: folder,
+                    includingPropertiesForKeys: [.isRegularFileKey, .creationDateKey],
+                    options: [.skipsHiddenFiles]
+                )
 
-        var copied: UInt64 = 0
+                let savedFiles = contents.compactMap { url -> SavedSectionFile? in
+                    let ext = url.pathExtension.lowercased()
+                    guard supportedExtensions.contains(ext) else { return nil }
 
-        while let chunk = try input.read(upToCount: 256 * 1024),
-              !chunk.isEmpty {
-            copied += UInt64(chunk.count)
+                    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                    let size = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+                    let date = (attributes?[.creationDate] as? Date) ?? .distantPast
 
-            guard copied <= expectedSize else {
-                throw ZIPArchiveError.archiveTooLarge
-            }
+                    return SavedSectionFile(url: url, sizeBytes: size, creationDate: date)
+                }
 
-            try destination.write(contentsOf: chunk)
-        }
-
-        guard copied == expectedSize else {
-            throw ZIPArchiveError.cannotCreateArchive
-        }
-    }
-
-    private static func crc32(of url: URL) throws -> UInt32 {
-        let input = try FileHandle(forReadingFrom: url)
-        defer {
-            try? input.close()
-        }
-
-        var checksum: UInt32 = 0xFFFFFFFF
-
-        while let chunk = try input.read(upToCount: 256 * 1024),
-              !chunk.isEmpty {
-            for byte in chunk {
-                let index = Int((checksum ^ UInt32(byte)) & 0xFF)
-                checksum = (checksum >> 8) ^ crcTable[index]
-            }
-        }
-
-        return checksum ^ 0xFFFFFFFF
-    }
-
-    private static let crcTable: [UInt32] = {
-        (0..<256).map { value in
-            var result = UInt32(value)
-
-            for _ in 0..<8 {
-                if (result & 1) != 0 {
-                    result = (result >> 1) ^ 0xEDB88320
-                } else {
-                    result >>= 1
+                if !savedFiles.isEmpty {
+                    let folderID = folder.lastPathComponent.lowercased()
+                    loadedGroups.append(
+                        SavedFileGroup(
+                            id: folderID,
+                            gameName: gameNames[folderID] ?? "Unknown Game",
+                            files: savedFiles
+                        )
+                    )
                 }
             }
 
-            return result
+            groups = loadedGroups.sorted {
+                $0.gameName.localizedCaseInsensitiveCompare($1.gameName) == .orderedAscending
+            }
+
+            let existingIDs = Set(allFiles.map { $0.id })
+            selectedFileIDs.formIntersection(existingIDs)
+        } catch {
+            errorMessage = error.localizedDescription
         }
-    }()
+    }
 
-    private static func dosDateTime(_ date: Date) -> (UInt16, UInt16) {
-        let calendar = Calendar(identifier: .gregorian)
-        let components = calendar.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second],
-            from: date
+    private func deletePendingFile() {
+        guard let file = pendingDelete else { return }
+
+        do {
+            try FileManager.default.removeItem(at: file.url)
+            selectedFileIDs.remove(file.id)
+            pendingDelete = nil
+            loadFiles()
+        } catch {
+            pendingDelete = nil
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteSelectedFiles() {
+        let filesToDelete = selectedFiles
+        var failures: [String] = []
+
+        for file in filesToDelete {
+            do {
+                try FileManager.default.removeItem(at: file.url)
+            } catch {
+                failures.append("\(file.url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        selectedFileIDs.removeAll()
+        isSelectionMode = false
+        loadFiles()
+
+        if !failures.isEmpty {
+            errorMessage = failures.joined(separator: "\n")
+        }
+    }
+}
+
+private struct MultiFileShareSheet: UIViewControllerRepresentable {
+    let urls: [URL]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(
+            activityItems: urls.map { $0 as Any },
+            applicationActivities: nil
         )
-
-        let year = min(2107, max(1980, components.year ?? 1980))
-        let month = min(12, max(1, components.month ?? 1))
-        let day = min(31, max(1, components.day ?? 1))
-        let hour = min(23, max(0, components.hour ?? 0))
-        let minute = min(59, max(0, components.minute ?? 0))
-        let second = min(59, max(0, components.second ?? 0))
-
-        let time = UInt16(
-            (hour << 11) |
-            (minute << 5) |
-            (second / 2)
-        )
-
-        let dosDate = UInt16(
-            ((year - 1980) << 9) |
-            (month << 5) |
-            day
-        )
-
-        return (time, dosDate)
     }
 
-    private static func makeLocalHeader(
-        filename: Data,
-        checksum: UInt32,
-        fileSize: UInt32,
-        dosTime: UInt16,
-        dosDate: UInt16
-    ) -> Data {
-        var data = Data()
+    func updateUIViewController(
+        _ controller: UIActivityViewController,
+        context: Context
+    ) {}
+}
 
-        append(UInt32(0x04034B50), to: &data)
-        append(UInt16(20), to: &data)
-        append(UInt16(0x0800), to: &data)
-        append(UInt16(0), to: &data)
-        append(dosTime, to: &data)
-        append(dosDate, to: &data)
-        append(checksum, to: &data)
-        append(fileSize, to: &data)
-        append(fileSize, to: &data)
-        append(UInt16(filename.count), to: &data)
-        append(UInt16(0), to: &data)
+private struct FileDetailsView: View {
+    let url: URL
+    let gameName: String
 
-        data.append(filename)
+    @Environment(\.dismiss) private var dismiss
 
-        return data
+    private var fileBytes: Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    private static func makeCentralHeader(
-        filename: Data,
-        checksum: UInt32,
-        fileSize: UInt32,
-        dosTime: UInt16,
-        dosDate: UInt16,
-        localHeaderOffset: UInt32
-    ) -> Data {
-        var data = Data()
+    var body: some View {
+        List {
+            Section("File") {
+                detailRow("File name", value: url.lastPathComponent)
+                detailRow("Format", value: SavedSectionFile.formatName(for: url))
+                detailRow(
+                    "Size",
+                    value: ByteCountFormatter.string(fromByteCount: fileBytes, countStyle: .file)
+                )
+                detailRow("Exact size", value: "\(fileBytes) bytes")
+            }
 
-        append(UInt32(0x02014B50), to: &data)
-        append(UInt16(20), to: &data)
-        append(UInt16(20), to: &data)
-        append(UInt16(0x0800), to: &data)
-        append(UInt16(0), to: &data)
-        append(dosTime, to: &data)
-        append(dosDate, to: &data)
-        append(checksum, to: &data)
-        append(fileSize, to: &data)
-        append(fileSize, to: &data)
-        append(UInt16(filename.count), to: &data)
-        append(UInt16(0), to: &data)
-        append(UInt16(0), to: &data)
-        append(UInt16(0), to: &data)
-        append(UInt16(0), to: &data)
-        append(UInt32(0), to: &data)
-        append(localHeaderOffset, to: &data)
+            Section("Game") {
+                detailRow("Game name", value: gameName)
+            }
 
-        data.append(filename)
+            Section("Storage") {
+                detailRow("Folder", value: url.deletingLastPathComponent().lastPathComponent)
+                detailRow("File location", value: url.path)
+            }
 
-        return data
+            Section {
+                ShareLink(item: url) {
+                    Label("Share This File", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
+        .navigationTitle("File Details")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { dismiss() }
+            }
+        }
     }
 
-    private static func makeEndRecord(
-        fileCount: UInt16,
-        centralDirectorySize: UInt32,
-        centralDirectoryOffset: UInt32
-    ) -> Data {
-        var data = Data()
+    private func detailRow(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-        append(UInt32(0x06054B50), to: &data)
-        append(UInt16(0), to: &data)
-        append(UInt16(0), to: &data)
-        append(fileCount, to: &data)
-        append(fileCount, to: &data)
-        append(centralDirectorySize, to: &data)
-        append(centralDirectoryOffset, to: &data)
-        append(UInt16(0), to: &data)
+            Text(value)
+                .font(.body)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 3)
+    }
+}
 
-        return data
+private struct SavedFileThumbnail: View {
+    let url: URL
+
+    private var symbol: String {
+        switch url.pathExtension.lowercased() {
+        case "txt": return "text.alignleft"
+        case "json": return "curlybraces"
+        case "xml": return "chevron.left.forwardslash.chevron.right"
+        case "pdf": return "doc.richtext"
+        case "mp4", "mov", "m4v": return "video"
+        default: return "doc"
+        }
     }
 
-    private static func append(
-        _ value: UInt16,
-        to data: inout Data
+    var body: some View {
+        Group {
+            if let image = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: symbol)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(18)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 76, height: 76)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct SavedFileGroup: Identifiable {
+    let id: String
+    let gameName: String
+    let files: [SavedSectionFile]
+}
+
+private struct SavedSectionFile: Identifiable {
+    let url: URL
+    let sizeBytes: Int64
+    let creationDate: Date
+
+    var id: String { url.path }
+
+    var size: String {
+        ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+    }
+
+    var format: String {
+        Self.formatName(for: url)
+    }
+
+    static func formatName(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "png": return "PNG Image"
+        case "gif": return "GIF Image"
+        case "jpg", "jpeg": return "JPEG Image"
+        case "heic": return "HEIC Image"
+        case "mp4": return "MP4 Video"
+        case "mov": return "MOV Video"
+        case "m4v": return "M4V Video"
+        case "txt": return "Text File"
+        case "json": return "JSON Data"
+        case "xml": return "XML Document"
+        case "pdf": return "PDF Document"
+        default: return "File"
+        }
+    }
+}
+
+private struct PreviewItem: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
+
+private struct FileDetailItem: Identifiable {
+    let url: URL
+    let gameName: String
+    var id: String { url.path }
+}
+
+private struct QuickLookPreviewController: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(
+        _ controller: QLPreviewController,
+        context: Context
     ) {
-        data.append(UInt8(value & 0xFF))
-        data.append(UInt8((value >> 8) & 0xFF))
+        context.coordinator.url = url
+        controller.reloadData()
     }
 
-    private static func append(
-        _ value: UInt32,
-        to data: inout Data
-    ) {
-        data.append(UInt8(value & 0xFF))
-        data.append(UInt8((value >> 8) & 0xFF))
-        data.append(UInt8((value >> 16) & 0xFF))
-        data.append(UInt8((value >> 24) & 0xFF))
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        var url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+            1
+        }
+
+        func previewController(
+            _ controller: QLPreviewController,
+            previewItemAt index: Int
+        ) -> QLPreviewItem {
+            url as NSURL
+        }
     }
 }
