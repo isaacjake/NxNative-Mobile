@@ -141,15 +141,51 @@ extension UTType {
         UTType(filenameExtension: "xci") ?? .data
 }
 
+enum GameContentKind: String, Codable, CaseIterable, Identifiable {
+    case unknown
+    case baseGame
+    case update
+    case downloadableContent
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .unknown:
+            return "Unclassified"
+        case .baseGame:
+            return "Base Game"
+        case .update:
+            return "Update"
+        case .downloadableContent:
+            return "DLC"
+        }
+    }
+}
+
 struct ImportedGame: Identifiable, Codable {
     let id: UUID
     let name: String
     let fileName: String
 
-    init(name: String, fileName: String) {
+    var contentKind: GameContentKind?
+    var baseGameID: UUID?
+
+    init(
+        name: String,
+        fileName: String,
+        contentKind: GameContentKind? = nil,
+        baseGameID: UUID? = nil
+    ) {
         self.id = UUID()
         self.name = name
         self.fileName = fileName
+        self.contentKind = contentKind
+        self.baseGameID = baseGameID
+    }
+
+    var effectiveContentKind: GameContentKind {
+        contentKind ?? .unknown
     }
 
     var fileURL: URL {
