@@ -16,14 +16,10 @@ private struct LibraryMetadata: Codable {
         guard let contentType else { return nil }
 
         switch contentType {
-        case 0x80:
-            return .baseGame
-        case 0x81:
-            return .update
-        case 0x82:
-            return .downloadableContent
-        default:
-            return nil
+        case 0x80: return .baseGame
+        case 0x81: return .update
+        case 0x82: return .downloadableContent
+        default: return nil
         }
     }
 
@@ -34,14 +30,14 @@ private struct LibraryMetadata: Codable {
 
         switch contentType {
         case 0x80:
-            return "CNMT type 0x80 identifies an Application. This is a suggestion, not full package verification."
+            return "CNMT type 0x80 identifies an Application. Suggestion only."
         case 0x81:
-            return "CNMT type 0x81 identifies a Patch. This is a suggestion, not full package verification."
+            return "CNMT type 0x81 identifies a Patch. Suggestion only."
         case 0x82:
-            return "CNMT type 0x82 identifies Add-on Content. This is a suggestion, not full package verification."
+            return "CNMT type 0x82 identifies Add-on Content. Suggestion only."
         default:
             return String(
-                format: "CNMT type 0x%02X is not mapped to a classification.",
+                format: "CNMT type 0x%02X is not mapped.",
                 contentType
             )
         }
@@ -94,6 +90,8 @@ struct GameLibraryView: View {
     var body: some View {
         NavigationStack {
             List {
+                relationshipsSection
+
                 ForEach(sections, id: \.kind) { section in
                     Section(section.title) {
                         let indices = games.indices.filter {
@@ -115,6 +113,83 @@ struct GameLibraryView: View {
         }
     }
 
+    private var relationshipsSection: some View {
+        Section("Game Relationships") {
+            let baseGames = games.filter {
+                $0.effectiveContentKind == .baseGame
+            }
+
+            if baseGames.isEmpty {
+                Text("Classify a game as Base Game to begin linking related files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(baseGames) { baseGame in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            baseGame.name,
+                            systemImage: "gamecontroller.fill"
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        let relatedGames = games.filter {
+                            $0.baseGameID == baseGame.id
+                        }
+
+                        if relatedGames.isEmpty {
+                            Text("No linked updates or DLC.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(relatedGames) { related in
+                                HStack {
+                                    Image(
+                                        systemName:
+                                            related.effectiveContentKind == .update
+                                            ? "arrow.up.circle"
+                                            : "puzzlepiece"
+                                    )
+
+                                    Text(related.name)
+                                        .font(.caption)
+
+                                    Spacer()
+
+                                    Text(
+                                        related.effectiveContentKind.displayName
+                                    )
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            let unlinked = games.filter {
+                ($0.effectiveContentKind == .update ||
+                 $0.effectiveContentKind == .downloadableContent) &&
+                $0.baseGameID == nil
+            }
+
+            if !unlinked.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Not linked to a base game")
+                        .font(.subheadline.weight(.semibold))
+
+                    ForEach(unlinked) { game in
+                        Text(game.name)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
     private func gameRow(at index: Int) -> some View {
         let game = games[index]
 
@@ -128,6 +203,28 @@ struct GameLibraryView: View {
 
             Text("Classification: \(game.effectiveContentKind.displayName)")
                 .font(.caption)
+
+            if game.effectiveContentKind == .update ||
+               game.effectiveContentKind == .downloadableContent {
+                let baseGames = games.filter {
+                    $0.effectiveContentKind == .baseGame &&
+                    $0.id != game.id
+                }
+
+                Picker(
+                    "Linked Base Game",
+                    selection: relationshipBinding(at: index)
+                ) {
+                    Text("Not linked")
+                        .tag(Optional<UUID>.none)
+
+                    ForEach(baseGames) { baseGame in
+                        Text(baseGame.name)
+                            .tag(Optional(baseGame.id))
+                    }
+                }
+                .pickerStyle(.menu)
+            }
 
             if let result = metadata[game.id] {
                 Divider()
@@ -236,6 +333,20 @@ struct GameLibraryView: View {
         .padding(.vertical, 4)
     }
 
+    private func relationshipBinding(
+        at index: Int
+    ) -> Binding<UUID?> {
+        Binding(
+            get: {
+                games[index].baseGameID
+            },
+            set: { newID in
+                games[index].baseGameID = newID
+                ImportedGame.save(games)
+            }
+        )
+    }
+
     private func metadataLine(
         _ label: String,
         _ value: String?
@@ -257,7 +368,9 @@ struct GameLibraryView: View {
         at index: Int
     ) -> Binding<GameContentKind> {
         Binding(
-            get: { games[index].effectiveContentKind },
+            get: {
+                games[index].effectiveContentKind
+            },
             set: { newKind in
                 games[index].contentKind =
                     newKind == .unknown ? nil : newKind
