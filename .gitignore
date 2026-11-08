@@ -1,0 +1,13 @@
+.DS_Store
+xcuserdata/
+*.xcodeproj
+DerivedData/
+build/
+# Never commit keys or game files
+*.keys
+*.nsp
+*.xci
+*.nca
+*.nsz
+*.xcz
+*.ipa
