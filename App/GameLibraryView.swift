@@ -1,7 +1,7 @@
 
 import SwiftUI
 
-private struct LibraryMetadata {
+private struct LibraryMetadata: Codable {
     var programID: String?
     var titleID: String?
     var applicationVersion: UInt32?
@@ -34,14 +34,14 @@ private struct LibraryMetadata {
 
         switch contentType {
         case 0x80:
-            return "CNMT type 0x80 identifies an Application. This is a classification suggestion, not full package verification."
+            return "CNMT type 0x80 identifies an Application. This is a suggestion, not full package verification."
         case 0x81:
-            return "CNMT type 0x81 identifies a Patch. This is a classification suggestion, not full package verification."
+            return "CNMT type 0x81 identifies a Patch. This is a suggestion, not full package verification."
         case 0x82:
-            return "CNMT type 0x82 identifies Add-on Content. This is a classification suggestion, not full package verification."
+            return "CNMT type 0x82 identifies Add-on Content. This is a suggestion, not full package verification."
         default:
             return String(
-                format: "CNMT type 0x%02X is not mapped to a game classification.",
+                format: "CNMT type 0x%02X is not mapped to a classification.",
                 contentType
             )
         }
@@ -51,8 +51,13 @@ private struct LibraryMetadata {
 struct GameLibraryView: View {
     @Binding var games: [ImportedGame]
 
-    @State private var metadata: [UUID: LibraryMetadata] = [:]
+    @State private var metadata: [UUID: LibraryMetadata] =
+        Self.loadMetadata()
+
     @State private var scanning: Set<UUID> = []
+
+    private static let metadataStorageKey =
+        "Xerenge.LibraryMetadata.v1"
 
     private let sections: [(kind: GameContentKind, title: String)] = [
         (.baseGame, "Base Games"),
@@ -60,6 +65,31 @@ struct GameLibraryView: View {
         (.downloadableContent, "DLC"),
         (.unknown, "Unclassified Files")
     ]
+
+    private static func loadMetadata() -> [UUID: LibraryMetadata] {
+        guard let data = UserDefaults.standard.data(
+            forKey: metadataStorageKey
+        ),
+        let saved = try? JSONDecoder().decode(
+            [UUID: LibraryMetadata].self,
+            from: data
+        ) else {
+            return [:]
+        }
+
+        return saved
+    }
+
+    private func saveMetadata() {
+        guard let data = try? JSONEncoder().encode(metadata) else {
+            return
+        }
+
+        UserDefaults.standard.set(
+            data,
+            forKey: Self.metadataStorageKey
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -125,7 +155,10 @@ struct GameLibraryView: View {
                     String(result.contentCount)
                 )
 
-                metadataLine("NCA files found", String(result.ncaCount))
+                metadataLine(
+                    "NCA files found",
+                    String(result.ncaCount)
+                )
 
                 metadataLine(
                     "Plaintext CNMT files",
@@ -228,6 +261,7 @@ struct GameLibraryView: View {
             set: { newKind in
                 games[index].contentKind =
                     newKind == .unknown ? nil : newKind
+
                 ImportedGame.save(games)
             }
         )
@@ -366,6 +400,7 @@ struct GameLibraryView: View {
 
             DispatchQueue.main.async {
                 metadata[game.id] = result
+                saveMetadata()
                 scanning.remove(game.id)
             }
         }
