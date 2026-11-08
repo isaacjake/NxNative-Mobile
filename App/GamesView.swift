@@ -1,3 +1,4 @@
+
 import SwiftUI
 
 struct GamesView: View {
@@ -300,6 +301,11 @@ struct GamesView: View {
 
             Text("Signature: \(result.magic)")
                 .font(.caption)
+
+            if let programID = result.programID {
+                Text("Program ID: \(programID)")
+                    .font(.caption)
+            }
 
             Text("Distribution type: \(byteDescription(result.distributionType))")
                 .font(.caption)
