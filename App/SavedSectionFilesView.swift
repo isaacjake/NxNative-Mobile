@@ -24,38 +24,40 @@ struct SavedSectionFilesView: View {
                         ForEach(groups) { group in
                             Section(group.gameName) {
                                 ForEach(group.files) { file in
-                                    VStack(alignment: .leading, spacing: 9) {
-                                        Label {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        SavedFileThumbnail(url: file.url)
+
+                                        VStack(alignment: .leading, spacing: 8) {
                                             Text(file.url.lastPathComponent)
                                                 .font(.headline)
                                                 .lineLimit(2)
-                                        } icon: {
-                                            Image(systemName: file.icon)
-                                                .foregroundStyle(.cyan)
-                                        }
 
-                                        HStack(spacing: 12) {
-                                            Text(file.format)
-                                            Text(file.size)
-                                        }
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
-                                        HStack {
-                                            Button {
-                                                previewItem = PreviewItem(url: file.url)
-                                            } label: {
-                                                Label("Preview", systemImage: "eye")
+                                            HStack(spacing: 10) {
+                                                Text(file.format)
+                                                Text(file.size)
                                             }
-                                            .buttonStyle(.bordered)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
 
-                                            ShareLink(item: file.url) {
-                                                Label("Share", systemImage: "square.and.arrow.up")
+                                            HStack {
+                                                Button {
+                                                    previewItem = PreviewItem(url: file.url)
+                                                } label: {
+                                                    Label("Preview", systemImage: "eye")
+                                                }
+                                                .buttonStyle(.bordered)
+
+                                                ShareLink(item: file.url) {
+                                                    Label(
+                                                        "Share",
+                                                        systemImage: "square.and.arrow.up"
+                                                    )
+                                                }
+                                                .buttonStyle(.bordered)
                                             }
-                                            .buttonStyle(.bordered)
                                         }
                                     }
-                                    .padding(.vertical, 5)
+                                    .padding(.vertical, 6)
                                 }
                             }
                         }
@@ -204,6 +206,29 @@ struct SavedSectionFilesView: View {
     }
 }
 
+private struct SavedFileThumbnail: View {
+    let url: URL
+
+    var body: some View {
+        Group {
+            if let image = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "doc")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(18)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 76, height: 76)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 private struct SavedFileGroup: Identifiable {
     let id: String
     let gameName: String
@@ -222,10 +247,6 @@ private struct SavedSectionFile: Identifiable {
         case "gif": return "GIF Image"
         default: return "File"
         }
-    }
-
-    var icon: String {
-        url.pathExtension.lowercased() == "png" ? "photo" : "film"
     }
 }
 
