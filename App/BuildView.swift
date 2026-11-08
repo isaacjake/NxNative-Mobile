@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -14,9 +13,14 @@ struct BuildView: View {
 
     @State private var games = ImportedGame.loadSaved()
     @State private var selectedGameID: UUID?
+
     @State private var preflightMessage = ""
     @State private var preflightLines: [String] = []
     @State private var isRunningPreflight = false
+
+    @State private var sectionReportMessage = ""
+    @State private var sectionReportLines: [String] = []
+    @State private var isRunningSectionReport = false
 
     private var selectedGame: ImportedGame? {
         games.first { $0.id == selectedGameID }
@@ -85,6 +89,51 @@ struct BuildView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                    }
+                }
+
+                Section("Saved NCA Section Report") {
+                    if let game = selectedGame {
+                        Text("Inspect the saved NCA headers for this game. This reads header metadata only; it does not decrypt section contents.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            runSectionReport(for: game)
+                        } label: {
+                            if isRunningSectionReport {
+                                Label("Inspecting NCA Headers...", systemImage: "hourglass")
+                            } else {
+                                Label("Inspect Saved NCA Sections", systemImage: "doc.text.magnifyingglass")
+                            }
+                        }
+                        .disabled(isRunningSectionReport)
+
+                        if !sectionReportMessage.isEmpty {
+                            Label(
+                                sectionReportMessage,
+                                systemImage: sectionReportMessage.hasPrefix("Report complete")
+                                    ? "checkmark.circle.fill"
+                                    : "exclamationmark.triangle.fill"
+                            )
+                            .font(.subheadline)
+                            .foregroundStyle(
+                                sectionReportMessage.hasPrefix("Report complete")
+                                    ? .green
+                                    : .orange
+                            )
+                        }
+
+                        ForEach(Array(sectionReportLines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    } else {
+                        Text("Select an imported game above first.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -178,7 +227,7 @@ struct BuildView: View {
                     Text("Develop an on-device game compilation workflow without a Mac, Xcode, or hosted runners.")
                         .font(.footnote)
 
-                    Text("Preflight checks archive structure only. It does not decrypt or compile game content.")
+                    Text("Preflight checks archive structure only. The NCA report reads header metadata only. Neither decrypts or compiles game content.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -196,6 +245,8 @@ struct BuildView: View {
             .onChange(of: selectedGameID) {
                 preflightMessage = ""
                 preflightLines = []
+                sectionReportMessage = ""
+                sectionReportLines = []
             }
             .fileImporter(
                 isPresented: $showingKeysPicker,
@@ -347,6 +398,152 @@ struct BuildView: View {
         }
     }
 
+    private func runSectionReport(for game: ImportedGame) {
+        guard !isRunningSectionReport else { return }
+
+        isRunningSectionReport = true
+        sectionReportMessage = "Reading saved NCA headers..."
+        sectionReportLines = []
+
+        DispatchQueue.global(qos: .utility).async {
+            var lines: [String] = []
+
+            let documents = FileManager.default.urls(
+                for: .documentDirectory,
+                in: .userDomainMask
+            )[0]
+
+            let folder = documents
+                .appendingPathComponent("NxNativeExtracted", isDirectory: true)
+                .appendingPathComponent(game.id.uuidString, isDirectory: true)
+
+            do {
+                guard FileManager.default.fileExists(atPath: folder.path) else {
+                    throw NCAReportError.folderNotFound
+                }
+
+                let files = try FileManager.default.contentsOfDirectory(
+                    at: folder,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                )
+
+                let ncaFiles = files
+                    .filter { $0.pathExtension.lowercased() == "nca" }
+                    .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+                guard !ncaFiles.isEmpty else {
+                    throw NCAReportError.noNCAFiles
+                }
+
+                lines.append("Saved NCA files found: \(ncaFiles.count)")
+                lines.append("Inspection type: Header metadata only")
+                lines.append("Section contents: Not read or decrypted")
+                lines.append("")
+
+                for fileURL in ncaFiles {
+                    let result = NCAInspector.inspect(fileURL)
+
+                    let fileSize = ByteCountFormatter.string(
+                        fromByteCount: Int64(clamping: result.fileSize),
+                        countStyle: .file
+                    )
+
+                    lines.append("FILE: \(fileURL.lastPathComponent)")
+                    lines.append("File size: \(fileSize)")
+                    lines.append("Header: \(result.isRecognized ? "Recognized" : "Not recognized")")
+                    lines.append("Signature: \(result.magic)")
+
+                    if let programID = result.programID {
+                        lines.append("Program ID: \(programID)")
+                    }
+
+                    if !result.isRecognized {
+                        lines.append("Inspector message: \(result.message)")
+                        lines.append("")
+                        continue
+                    }
+
+                    if result.sections.isEmpty {
+                        lines.append("Section table: Not available for this NCA format")
+                    } else {
+                        for section in result.sections {
+                            lines.append("Section \(section.index + 1):")
+
+                            if section.startMediaUnit == 0 &&
+                                section.endMediaUnit == 0 {
+                                lines.append("  Status: Empty section")
+                                continue
+                            }
+
+                            lines.append(
+                                "  Media units: \(section.startMediaUnit) – \(section.endMediaUnit)"
+                            )
+
+                            lines.append(
+                                "  Offset: \(ByteCountFormatter.string(fromByteCount: Int64(clamping: section.offsetBytes), countStyle: .file)) (\(section.offsetBytes) bytes)"
+                            )
+
+                            lines.append(
+                                "  Size: \(ByteCountFormatter.string(fromByteCount: Int64(clamping: section.sizeBytes), countStyle: .file)) (\(section.sizeBytes) bytes)"
+                            )
+
+                            lines.append(
+                                "  Range: \(section.isValid ? "Within file bounds" : "Invalid or outside file bounds")"
+                            )
+
+                            lines.append("  Filesystem: \(filesystemName(section.fsType))")
+                            lines.append("  Hash type: \(hashName(section.hashType))")
+                            lines.append("  Encryption: \(encryptionName(section.encryptionType))")
+                        }
+                    }
+
+                    lines.append("")
+                }
+
+                DispatchQueue.main.async {
+                    sectionReportLines = lines
+                    sectionReportMessage = "Report complete — inspected \(ncaFiles.count) saved NCA file(s)."
+                    isRunningSectionReport = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    sectionReportMessage = "Report could not finish: \(error.localizedDescription)"
+                    sectionReportLines = lines
+                    isRunningSectionReport = false
+                }
+            }
+        }
+    }
+
+    private func filesystemName(_ value: UInt8) -> String {
+        switch value {
+        case 0: return "RomFS"
+        case 1: return "PartitionFS"
+        default: return "Unknown (\(value))"
+        }
+    }
+
+    private func hashName(_ value: UInt8) -> String {
+        switch value {
+        case 0: return "Auto"
+        case 2: return "Hierarchical SHA-256"
+        case 3: return "Hierarchical Integrity"
+        default: return "Unknown (\(value))"
+        }
+    }
+
+    private func encryptionName(_ value: UInt8) -> String {
+        switch value {
+        case 0: return "Auto"
+        case 1: return "None"
+        case 2: return "AES-XTS"
+        case 3: return "AES-CTR"
+        case 4: return "BKTR"
+        default: return "Unknown (\(value))"
+        }
+    }
+
     private func verifyHeaderKey() {
         do {
             let key = try KeyManager.loadHeaderKey()
@@ -364,5 +561,19 @@ struct BuildView: View {
     private func showError(_ error: Error) {
         statusMessage = error.localizedDescription
         showingStatus = true
+    }
+}
+
+private enum NCAReportError: LocalizedError {
+    case folderNotFound
+    case noNCAFiles
+
+    var errorDescription: String? {
+        switch self {
+        case .folderNotFound:
+            return "The saved extraction folder for this game was not found. No new extraction was started."
+        case .noNCAFiles:
+            return "No saved NCA files were found in this game's extraction folder."
+        }
     }
 }
