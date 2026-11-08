@@ -12,9 +12,9 @@ permissions:
 
 jobs:
   build:
-    name: Build iOS Simulator app
+    name: Build iOS apps
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -36,7 +36,7 @@ jobs:
           -scheme NxNativeMobile
           -sdk iphonesimulator
           -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath build/DerivedData
+          -derivedDataPath build/SimulatorDerivedData
           CODE_SIGNING_ALLOWED=NO
           build
 
@@ -44,6 +44,33 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NxNative-ios-simulator
-          path: build/DerivedData/Build/Products/Debug-iphonesimulator/NxNative.app
+          path: build/SimulatorDerivedData/Build/Products/Debug-iphonesimulator/NxNative.app
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Build unsigned iOS device app
+        run: >-
+          xcodebuild
+          -project NxNativeMobile.xcodeproj
+          -scheme NxNativeMobile
+          -configuration Release
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          -derivedDataPath build/DeviceDerivedData
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/DeviceDerivedData/Build/Products/Release-iphoneos/NxNative.app build/ipa/Payload/
+          cd build/ipa
+          /usr/bin/zip -qry NxNative-unsigned.ipa Payload
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: NxNative-unsigned-ipa
+          path: build/ipa/NxNative-unsigned.ipa
           if-no-files-found: error
           retention-days: 7
