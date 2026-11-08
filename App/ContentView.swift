@@ -1,4 +1,3 @@
-
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -36,23 +35,29 @@ struct ContentView: View {
             }
             .tag(1)
 
+            GameLibraryView(games: $importedGames)
+                .tabItem {
+                    Label("Library", systemImage: "books.vertical.fill")
+                }
+                .tag(2)
+
             SavedSectionFilesView()
                 .tabItem {
                     Label("Saved Files", systemImage: "folder.fill")
                 }
-                .tag(2)
+                .tag(3)
 
             BuildView()
                 .tabItem {
                     Label("Build", systemImage: "hammer.fill")
                 }
-                .tag(3)
+                .tag(4)
 
             OutputView()
                 .tabItem {
                     Label("Output", systemImage: "archivebox.fill")
                 }
-                .tag(4)
+                .tag(5)
         }
         .tint(.cyan)
         .fileImporter(
