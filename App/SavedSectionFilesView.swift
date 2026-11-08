@@ -7,6 +7,7 @@ struct SavedSectionFilesView: View {
     @State private var groups: [SavedFileGroup] = []
     @State private var previewItem: PreviewItem?
     @State private var detailItem: FileDetailItem?
+    @State private var pendingDelete: SavedSectionFile?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -63,6 +64,14 @@ struct SavedSectionFilesView: View {
                                                 }
                                                 .buttonStyle(.bordered)
                                                 .accessibilityLabel("Share file")
+
+                                                Button(role: .destructive) {
+                                                    pendingDelete = file
+                                                } label: {
+                                                    Image(systemName: "trash")
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .accessibilityLabel("Delete saved file")
                                             }
                                         }
                                     }
@@ -110,6 +119,26 @@ struct SavedSectionFilesView: View {
                     )
                 }
             }
+            .confirmationDialog(
+                "Delete Saved File?",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete File", role: .destructive) {
+                    deletePendingFile()
+                }
+
+                Button("Cancel", role: .cancel) {
+                    pendingDelete = nil
+                }
+            } message: {
+                Text(
+                    "This removes the saved copy from NxNative. Your original NSP or XCI game file will not be affected."
+                )
+            }
             .alert(
                 "File Error",
                 isPresented: Binding(
@@ -123,6 +152,19 @@ struct SavedSectionFilesView: View {
             } message: {
                 Text(errorMessage ?? "Unknown error")
             }
+        }
+    }
+
+    private func deletePendingFile() {
+        guard let file = pendingDelete else { return }
+
+        do {
+            try FileManager.default.removeItem(at: file.url)
+            pendingDelete = nil
+            loadFiles()
+        } catch {
+            pendingDelete = nil
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -249,10 +291,13 @@ private struct FileDetailsView: View {
             Section("File") {
                 detailRow("File name", value: url.lastPathComponent)
                 detailRow("Format", value: format)
-                detailRow("Size", value: ByteCountFormatter.string(
-                    fromByteCount: fileBytes,
-                    countStyle: .file
-                ))
+                detailRow(
+                    "Size",
+                    value: ByteCountFormatter.string(
+                        fromByteCount: fileBytes,
+                        countStyle: .file
+                    )
+                )
                 detailRow("Exact size", value: "\(fileBytes) bytes")
             }
 
@@ -265,11 +310,7 @@ private struct FileDetailsView: View {
                     "Folder",
                     value: url.deletingLastPathComponent().lastPathComponent
                 )
-
-                detailRow(
-                    "File location",
-                    value: url.path
-                )
+                detailRow("File location", value: url.path)
             }
 
             Section {
