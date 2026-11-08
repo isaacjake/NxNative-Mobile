@@ -9,12 +9,14 @@ struct HandoffTestStage: BuildStage {
     let name = "Clone bundle (handoff test)"
 
     func run(context: BuildContext, report: @Sendable (Double) -> Void) async throws {
+        try Task.checkCancellation()
         let fm = FileManager.default
         let source = Bundle.main.bundleURL
         let dest = context.workDir.appendingPathComponent("NxNativeTest.app", isDirectory: true)
 
         report(0.1)
         try fm.copyItem(at: source, to: dest)
+        try Task.checkCancellation()
 
         // Remove old signing material; AltStore re-signs on install.
         try? fm.removeItem(at: dest.appendingPathComponent("_CodeSignature"))
@@ -31,6 +33,7 @@ struct HandoffTestStage: BuildStage {
         plist["CFBundleName"] = "NxTest"
         let out = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
         try out.write(to: plistURL)
+        try Task.checkCancellation()
 
         report(1.0)
         context.appBundleURL = dest

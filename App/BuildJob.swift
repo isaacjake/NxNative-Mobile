@@ -14,10 +14,13 @@ protocol BuildStage: Sendable {
 final class BuildContext: @unchecked Sendable {
     let jobID = UUID()
     let workDir: URL
+    /// User-selected homebrew or personal test-project folder, when this job uses one.
+    let sourceFolder: URL?
     /// Set by the bundle stage: the finished (unsigned) .app directory.
     var appBundleURL: URL?
 
-    init() throws {
+    init(sourceFolder: URL? = nil) throws {
+        self.sourceFolder = sourceFolder
         workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("build-\(jobID.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
@@ -47,32 +50,66 @@ final class BuildJob: ObservableObject {
         guard case .idle = state else { return }
         task = Task { [weak self] in
             guard let self else { return }
-            let context: BuildContext
-            do { context = try BuildContext() } catch {
-                state = .failed(error.localizedDescription); return
-            }
-
             do {
-                for (index, stage) in stages.enumerated() {
-                    try Task.checkCancellation()
-                    state = .running(stage: stage.name, progress: Double(index) / Double(stages.count))
-                    try await stage.run(context: context) { [weak self] fraction in
-                        let overall = (Double(index) + fraction) / Double(stages.count)
-                        Task { @MainActor in self?.state = .running(stage: stage.name, progress: overall) }
+                _ = try await run(stages: stages)
+            } catch is CancellationError {
+                state = .cancelled
+            } catch {
+                state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Executes the shared pipeline and returns the exported unsigned IPA.
+    /// Queue owners can await this method and provide their own progress observer.
+    func run(
+        stages: [BuildStage],
+        sourceFolder: URL? = nil,
+        reportProgress: @escaping @Sendable (_ stage: String, _ fraction: Double) -> Void = { _, _ in }
+    ) async throws -> URL {
+        guard !stages.isEmpty else { throw BuildError.emptyPipeline }
+        let context = try BuildContext(sourceFolder: sourceFolder)
+
+        do {
+            for (index, stage) in stages.enumerated() {
+                try Task.checkCancellation()
+                try await ResourceGuard.checkpointGuard(
+                    minimumMB: BuildQueueLimits.minimumAvailableMemoryMB
+                )
+                try ResourceGuard.checkDisk(neededMB: BuildQueueLimits.minimumFreeDiskMB)
+
+                let startingProgress = Double(index) / Double(stages.count)
+                state = .running(stage: stage.name, progress: startingProgress)
+                reportProgress(stage.name, startingProgress)
+
+                try await stage.run(context: context) { [weak self] fraction in
+                    let overall = (Double(index) + min(1, max(0, fraction))) / Double(stages.count)
+                    reportProgress(stage.name, overall)
+                    Task { @MainActor in
+                        self?.state = .running(stage: stage.name, progress: overall)
                     }
                 }
                 try Task.checkCancellation()
-                guard let app = context.appBundleURL else { throw BuildError.noBundleProduced }
-                let ipa = try IPAExporter.export(appBundle: app)
-                context.cleanUp()
-                state = .finished(ipa: ipa)
-            } catch is CancellationError {
-                context.cleanUp()
-                state = .cancelled
-            } catch {
-                context.cleanUp()
-                state = .failed(error.localizedDescription)
             }
+
+            guard let app = context.appBundleURL else {
+                throw BuildError.noBundleProduced
+            }
+
+            let ipa = try IPAExporter.export(appBundle: app, jobID: context.jobID)
+            do {
+                try Task.checkCancellation()
+            } catch {
+                try? FileManager.default.removeItem(at: ipa)
+                throw error
+            }
+
+            context.cleanUp()
+            state = .finished(ipa: ipa)
+            return ipa
+        } catch {
+            context.cleanUp()
+            throw error
         }
     }
 
@@ -84,11 +121,13 @@ final class BuildJob: ObservableObject {
 enum BuildError: LocalizedError {
     case noBundleProduced
     case exportFailed
+    case emptyPipeline
 
     var errorDescription: String? {
         switch self {
         case .noBundleProduced: return "The build finished but no app bundle was produced."
         case .exportFailed: return "Could not package the app into an .ipa."
+        case .emptyPipeline: return "This build job has no stages to run."
         }
     }
 }
@@ -99,7 +138,7 @@ enum IPAExporter {
     /// Wraps `Foo.app` as `Payload/Foo.app`, zips it, and returns a `.ipa` URL
     /// in a stable Documents/Exports folder (so Files/AltStore can reach it).
     /// Output is UNSIGNED on purpose; AltStore re-signs on install.
-    static func export(appBundle: URL) throws -> URL {
+    static func export(appBundle: URL, jobID: UUID = UUID()) throws -> URL {
         let fm = FileManager.default
         let staging = fm.temporaryDirectory.appendingPathComponent("ipa-\(UUID().uuidString)")
         let payload = staging.appendingPathComponent("Payload", isDirectory: true)
@@ -117,7 +156,8 @@ enum IPAExporter {
                 .urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Exports", isDirectory: true)
             try? FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
-            let name = appBundle.deletingPathExtension().lastPathComponent + ".ipa"
+            let shortID = String(jobID.uuidString.prefix(8)).lowercased()
+            let name = appBundle.deletingPathExtension().lastPathComponent + "-" + shortID + ".ipa"
             let dest = exports.appendingPathComponent(name)
             try? FileManager.default.removeItem(at: dest)
             do {

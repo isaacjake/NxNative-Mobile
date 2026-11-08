@@ -58,6 +58,12 @@ struct ContentView: View {
                     Label("Output", systemImage: "archivebox.fill")
                 }
                 .tag(5)
+
+            BuildQueueView()
+                .tabItem {
+                    Label("Queue", systemImage: "list.bullet.rectangle")
+                }
+                .tag(6)
         }
         .tint(.cyan)
         .fileImporter(
