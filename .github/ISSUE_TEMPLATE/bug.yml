@@ -1,0 +1,19 @@
+name: Bug report
+description: Something broke in a beta build
+body:
+  - type: input
+    attributes: { label: Build number (Release name), placeholder: "Beta 12" }
+    validations: { required: true }
+  - type: input
+    attributes: { label: Device model }
+    validations: { required: true }
+  - type: input
+    attributes: { label: iOS version }
+    validations: { required: true }
+  - type: input
+    attributes: { label: Sideloader and version, placeholder: "AltStore 2.x" }
+  - type: textarea
+    attributes: { label: What happened, description: "Steps, what you expected, what you got" }
+    validations: { required: true }
+  - type: textarea
+    attributes: { label: Logs or screenshots }
