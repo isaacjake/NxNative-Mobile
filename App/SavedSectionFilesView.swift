@@ -53,6 +53,10 @@ struct SavedSectionFilesView: View {
     @State private var pendingDelete: SavedSectionFile?
     @State private var errorMessage: String?
 
+    @State private var isSelectionMode = false
+    @State private var selectedFileIDs: Set<String> = []
+    @State private var isBulkDeleteConfirmationPresented = false
+
     private let supportedExtensions: Set<String> = [
         "png", "gif", "jpg", "jpeg", "heic",
         "mp4", "mov", "m4v", "txt", "json", "xml", "pdf"
@@ -60,6 +64,10 @@ struct SavedSectionFilesView: View {
 
     private var allFiles: [SavedSectionFile] {
         groups.flatMap { $0.files }
+    }
+
+    private var selectedFiles: [SavedSectionFile] {
+        allFiles.filter { selectedFileIDs.contains($0.id) }
     }
 
     private func files(for filter: SavedFileFilter) -> [SavedSectionFile] {
@@ -102,7 +110,11 @@ struct SavedSectionFilesView: View {
                 }
             }
 
-            return SavedFileGroup(id: group.id, gameName: group.gameName, files: sorted)
+            return SavedFileGroup(
+                id: group.id,
+                gameName: group.gameName,
+                files: sorted
+            )
         }
     }
 
@@ -135,6 +147,28 @@ struct SavedSectionFilesView: View {
 
                         sortMenu
 
+                        if isSelectionMode {
+                            HStack {
+                                Text("\(selectedFileIDs.count) selected")
+                                    .font(.subheadline.weight(.semibold))
+
+                                Spacer()
+
+                                Button("Select All") {
+                                    selectAllVisibleFiles()
+                                }
+                                .font(.subheadline)
+
+                                Button("Clear") {
+                                    selectedFileIDs.removeAll()
+                                }
+                                .font(.subheadline)
+                                .disabled(selectedFileIDs.isEmpty)
+                            }
+                            .padding(.horizontal)
+                            .padding(.bottom, 8)
+                        }
+
                         if filteredGroups.isEmpty {
                             ContentUnavailableView(
                                 "No Matching Files",
@@ -157,13 +191,28 @@ struct SavedSectionFilesView: View {
             }
             .navigationTitle("Saved Files")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         loadFiles()
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .accessibilityLabel("Refresh saved files")
+
+                    if !allFiles.isEmpty {
+                        Button(isSelectionMode ? "Cancel" : "Select") {
+                            toggleSelectionMode()
+                        }
+                    }
+
+                    if isSelectionMode && !selectedFileIDs.isEmpty {
+                        Button(role: .destructive) {
+                            isBulkDeleteConfirmationPresented = true
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .accessibilityLabel("Delete selected files")
+                    }
                 }
             }
             .onAppear { loadFiles() }
@@ -202,6 +251,19 @@ struct SavedSectionFilesView: View {
             } message: {
                 Text("This removes the saved copy from NxNative. Your original NSP or XCI game file will not be affected.")
             }
+            .confirmationDialog(
+                "Delete \(selectedFileIDs.count) Saved Files?",
+                isPresented: $isBulkDeleteConfirmationPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Delete \(selectedFileIDs.count) Files", role: .destructive) {
+                    deleteSelectedFiles()
+                }
+
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Only the selected saved copies will be deleted. Original NSP and XCI files will not be affected.")
+            }
             .alert(
                 "File Error",
                 isPresented: Binding(
@@ -213,6 +275,30 @@ struct SavedSectionFilesView: View {
             } message: {
                 Text(errorMessage ?? "Unknown error")
             }
+        }
+    }
+
+    private func toggleSelectionMode() {
+        isSelectionMode.toggle()
+
+        if !isSelectionMode {
+            selectedFileIDs.removeAll()
+        }
+    }
+
+    private func selectAllVisibleFiles() {
+        for group in filteredGroups {
+            for file in group.files {
+                selectedFileIDs.insert(file.id)
+            }
+        }
+    }
+
+    private func toggleFileSelection(_ file: SavedSectionFile) {
+        if selectedFileIDs.contains(file.id) {
+            selectedFileIDs.remove(file.id)
+        } else {
+            selectedFileIDs.insert(file.id)
         }
     }
 
@@ -412,6 +498,31 @@ struct SavedSectionFilesView: View {
         gameName: String
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
+            if isSelectionMode {
+                Button {
+                    toggleFileSelection(file)
+                } label: {
+                    Image(
+                        systemName: selectedFileIDs.contains(file.id)
+                            ? "checkmark.circle.fill"
+                            : "circle"
+                    )
+                    .font(.title2)
+                    .foregroundStyle(
+                        selectedFileIDs.contains(file.id)
+                            ? Color.accentColor
+                            : Color.secondary
+                    )
+                    .frame(width: 28, height: 76)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    selectedFileIDs.contains(file.id)
+                        ? "Deselect file"
+                        : "Select file"
+                )
+            }
+
             SavedFileThumbnail(url: file.url)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -474,6 +585,7 @@ struct SavedSectionFilesView: View {
         do {
             guard FileManager.default.fileExists(atPath: root.path) else {
                 groups = []
+                selectedFileIDs.removeAll()
                 return
             }
 
@@ -532,6 +644,9 @@ struct SavedSectionFilesView: View {
             groups = loadedGroups.sorted {
                 $0.gameName.localizedCaseInsensitiveCompare($1.gameName) == .orderedAscending
             }
+
+            let existingIDs = Set(allFiles.map { $0.id })
+            selectedFileIDs.formIntersection(existingIDs)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -542,11 +657,33 @@ struct SavedSectionFilesView: View {
 
         do {
             try FileManager.default.removeItem(at: file.url)
+            selectedFileIDs.remove(file.id)
             pendingDelete = nil
             loadFiles()
         } catch {
             pendingDelete = nil
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteSelectedFiles() {
+        let filesToDelete = selectedFiles
+        var failures: [String] = []
+
+        for file in filesToDelete {
+            do {
+                try FileManager.default.removeItem(at: file.url)
+            } catch {
+                failures.append("\(file.url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        selectedFileIDs.removeAll()
+        isSelectionMode = false
+        loadFiles()
+
+        if !failures.isEmpty {
+            errorMessage = failures.joined(separator: "\n")
         }
     }
 }
