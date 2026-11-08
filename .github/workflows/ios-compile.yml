@@ -1,59 +1,49 @@
-name: NxNative iOS Compile
+name: iOS Build
+
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: ios-compile-${{ github.ref }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
   build:
-    name: Compile iOS App
+    name: Build iOS Simulator app
     runs-on: macos-26
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: brew list --versions xcodegen || brew install xcodegen
+
       - name: Generate Xcode project
-        run: xcodegen generate
-      - name: Compile for iPhone (Release)
-        run: |
-          xcodebuild \
-            -project NxNativeMobile.xcodeproj \
-            -scheme NxNativeMobile \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/NxNativeBuild" \
-            CODE_SIGNING_ALLOWED=NO \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
-            MARKETING_VERSION=0.1.${{ github.run_number }} \
-            build
-      - name: Package unsigned IPA
-        run: |
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          cp -R \
-            "$RUNNER_TEMP/NxNativeBuild/Build/Products/Release-iphoneos/NxNative.app" \
-            "$RUNNER_TEMP/ipa/Payload/"
-          cd "$RUNNER_TEMP/ipa"
-          zip -qry "$GITHUB_WORKSPACE/NxNative-unsigned.ipa" Payload
-      - name: Upload IPA artifact
+        run: xcodegen generate --spec project.yml
+
+      - name: Build for iOS Simulator
+        run: >-
+          xcodebuild
+          -project NxNativeMobile.xcodeproj
+          -scheme NxNativeMobile
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath build/DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Upload simulator app
         uses: actions/upload-artifact@v4
         with:
-          name: NxNative-Unsigned-IPA
-          path: NxNative-unsigned.ipa
+          name: NxNative-ios-simulator
+          path: build/DerivedData/Build/Products/Debug-iphonesimulator/NxNative.app
           if-no-files-found: error
-      - name: Publish beta release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: beta-${{ github.run_number }}
-          name: Beta ${{ github.run_number }}
-          prerelease: true
-          files: NxNative-unsigned.ipa
+          retention-days: 7
