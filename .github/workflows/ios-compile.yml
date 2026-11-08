@@ -48,4 +48,12 @@ jobs:
         with:
           name: NxNative-Unsigned-IPA
           path: NxNative-unsigned.ipa
-          if-no-files-found:
+          if-no-files-found: error
+      - name: Publish beta release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: beta-${{ github.run_number }}
+          name: Beta ${{ github.run_number }}
+          prerelease: true
+          files: NxNative-unsigned.ipa
