@@ -1,3 +1,4 @@
+
 import SwiftUI
 
 private struct LibraryMetadata {
@@ -5,7 +6,7 @@ private struct LibraryMetadata {
     var titleID: String?
     var applicationVersion: UInt32?
     var contentType: UInt8?
-    var contentCount: Int?
+    var contentCount: Int
     var ncaCount: Int
     var plaintextCNMTCount: Int
     var encryptedCNMTCount: Int
@@ -15,14 +16,34 @@ private struct LibraryMetadata {
         guard let contentType else { return nil }
 
         switch contentType {
-        case 0:
+        case 0x80:
             return .baseGame
-        case 1:
+        case 0x81:
             return .update
-        case 2:
+        case 0x82:
             return .downloadableContent
         default:
             return nil
+        }
+    }
+
+    var suggestionExplanation: String {
+        guard let contentType else {
+            return "No readable CNMT content type was found. Encrypted CNMT metadata is not interpreted."
+        }
+
+        switch contentType {
+        case 0x80:
+            return "CNMT type 0x80 identifies an Application. This is a classification suggestion, not full package verification."
+        case 0x81:
+            return "CNMT type 0x81 identifies a Patch. This is a classification suggestion, not full package verification."
+        case 0x82:
+            return "CNMT type 0x82 identifies Add-on Content. This is a classification suggestion, not full package verification."
+        default:
+            return String(
+                format: "CNMT type 0x%02X is not mapped to a game classification.",
+                contentType
+            )
         }
     }
 }
@@ -94,12 +115,14 @@ struct GameLibraryView: View {
 
                 metadataLine(
                     "CNMT content type",
-                    result.contentType.map { String($0) }
+                    result.contentType.map {
+                        String(format: "0x%02X", $0)
+                    }
                 )
 
                 metadataLine(
                     "CNMT content entries",
-                    result.contentCount.map(String.init)
+                    String(result.contentCount)
                 )
 
                 metadataLine("NCA files found", String(result.ncaCount))
@@ -114,14 +137,14 @@ struct GameLibraryView: View {
                     String(result.encryptedCNMTCount)
                 )
 
-                if let suggestion = result.suggestedKind {
-                    Divider()
+                Divider()
 
+                if let suggestion = result.suggestedKind {
                     Text("Suggested classification: \(suggestion.displayName)")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.cyan)
 
-                    Text("Based on the readable CNMT content type. This is a suggestion, not automatic verification.")
+                    Text(result.suggestionExplanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -137,6 +160,13 @@ struct GameLibraryView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                } else {
+                    Text("No classification suggestion")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text(result.suggestionExplanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Text(result.status)
@@ -228,7 +258,7 @@ struct GameLibraryView: View {
             var foundTitleID: String?
             var foundVersion: UInt32?
             var foundContentType: UInt8?
-            var foundContentCount: Int?
+            var foundContentCount = 0
 
             var ncaCount = 0
             var plaintextCNMTCount = 0
@@ -299,7 +329,7 @@ struct GameLibraryView: View {
                         foundTitleID = inspection.titleID
                         foundVersion = inspection.version
                         foundContentType = inspection.contentType
-                        foundContentCount = inspection.contentCount
+                        foundContentCount = inspection.contentCount ?? 0
                         break
                     }
                 }
