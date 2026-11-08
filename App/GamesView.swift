@@ -1,864 +1,227 @@
+
 import SwiftUI
+import UniformTypeIdentifiers
 
-private struct SavedNCASectionResult: Identifiable {
-    let id: String
-    let fileName: String
-    let sectionNumber: Int
-    let inspection: NCASectionInspection
-    let sourceURL: URL
-}
-
-struct GamesView: View {
-    let games: [ImportedGame]
-    let importAction: () -> Void
-    let deleteAction: (ImportedGame) -> Void
-
-    @State private var inspectionResults: [UUID: GameFileInspection] = [:]
-    @State private var archiveResults: [UUID: [PFS0Entry]] = [:]
-    @State private var archiveErrors: [UUID: String] = [:]
-    @State private var extractionMessages: [String: String] = [:]
-    @State private var extractingEntries: Set<String> = []
-    @State private var ncaResults: [String: NCAInspection] = [:]
-    @State private var ticketResults: [String: TicketInspection] = [:]
-    @State private var cnmtResults: [String: CNMTInspection] = [:]
-    @State private var cnmtMessages: [String: String] = [:]
-    @State private var extractionProgress: [String: Double] = [:]
-    @State private var extractionBytes: [String: UInt64] = [:]
-
-    @State private var savedSectionResults: [UUID: [SavedNCASectionResult]] = [:]
-    @State private var savedSectionScanMessages: [UUID: String] = [:]
-    @State private var scanningSavedNCAs: Set<UUID> = []
+struct ContentView: View {
+    @State private var selectedTab = 0
+    @State private var importedGames = ImportedGame.loadSaved()
+    @State private var showingImporter = false
+    @State private var importError: String?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if games.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Games Imported", systemImage: "gamecontroller")
-                    } description: {
-                        Text("Import a legally obtained NSP or XCI game file to get started.")
-                    } actions: {
-                        Button(action: importAction) {
-                            Text("Import Game")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                } else {
-                    List {
-                        ForEach(games) { game in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "gamecontroller.fill")
-                                        .font(.title2)
-                                        .foregroundStyle(.cyan)
-
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(game.name)
-                                            .font(.headline)
-
-                                        Text(game.fileURL.pathExtension.uppercased())
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-
-                                    Spacer()
-                                }
-
-                                Button {
-                                    inspectGame(game)
-                                } label: {
-                                    Label("Inspect Game File", systemImage: "doc.text.magnifyingglass")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    inspectSavedNCAs(for: game)
-                                } label: {
-                                    if scanningSavedNCAs.contains(game.id) {
-                                        Label("Scanning Saved Files...", systemImage: "hourglass")
-                                    } else {
-                                        Label("Inspect Saved NCA Files", systemImage: "folder.badge.magnifyingglass")
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(scanningSavedNCAs.contains(game.id))
-
-                                if let message = savedSectionScanMessages[game.id] {
-                                    Text(message)
-                                        .font(.caption)
-                                        .foregroundStyle(message.hasPrefix("Scan complete") ? .green : .orange)
-                                }
-
-                                if let results = savedSectionResults[game.id] {
-                                    savedNCAResultsCard(results, gameID: game.id)
-                                }
-
-                                if let result = inspectionResults[game.id] {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        Label(
-                                            result.isRecognized ? "Header Recognized" : "Inspection Result",
-                                            systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                                        )
-                                        .foregroundStyle(result.isRecognized ? .green : .orange)
-
-                                        Text("Format: \(result.format)")
-                                            .font(.caption)
-
-                                        Text(result.message)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(10)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.secondary.opacity(0.10))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                }
-
-                                if let error = archiveErrors[game.id] {
-                                    Text("Archive error: \(error)")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
-                                }
-
-                                if let entries = archiveResults[game.id] {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("NSP Archive Contents")
-                                            .font(.headline)
-
-                                        Text("\(entries.count) entries found")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-
-                                        ForEach(entries) { entry in
-                                            let extractionID = "\(game.id.uuidString)-\(entry.id)"
-
-                                            VStack(alignment: .leading, spacing: 6) {
-                                                Text(entry.name)
-                                                    .font(.subheadline)
-                                                    .lineLimit(2)
-
-                                                Text(
-                                                    ByteCountFormatter.string(
-                                                        fromByteCount: Int64(clamping: entry.size),
-                                                        countStyle: .file
-                                                    )
-                                                )
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-
-                                                Button {
-                                                    extractEntry(entry, from: game)
-                                                } label: {
-                                                    if extractingEntries.contains(extractionID) {
-                                                        Label("Extracting...", systemImage: "arrow.down.doc")
-                                                    } else {
-                                                        Label("Extract File", systemImage: "arrow.down.doc")
-                                                    }
-                                                }
-                                                .buttonStyle(.bordered)
-                                                .disabled(extractingEntries.contains(extractionID))
-
-                                                if extractingEntries.contains(extractionID) {
-                                                    ProgressView(
-                                                        value: extractionProgress[extractionID] ?? 0
-                                                    )
-                                                    .tint(.cyan)
-
-                                                    Text(
-                                                        "\(Int((extractionProgress[extractionID] ?? 0) * 100))% — " +
-                                                        ByteCountFormatter.string(
-                                                            fromByteCount: Int64(clamping: extractionBytes[extractionID] ?? 0),
-                                                            countStyle: .file
-                                                        ) +
-                                                        " copied"
-                                                    )
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                                }
-
-                                                if let message = extractionMessages[extractionID] {
-                                                    Text(message)
-                                                        .font(.caption)
-                                                        .foregroundStyle(
-                                                            message.hasPrefix("Saved") ? .green : .orange
-                                                        )
-                                                }
-
-                                                if let result = ticketResults[extractionID] {
-                                                    ticketInspectionCard(result)
-                                                }
-
-                                                if let result = ncaResults[extractionID] {
-                                                    ncaInspectionCard(result)
-                                                }
-
-                                                if let result = cnmtResults[extractionID] {
-                                                    cnmtInspectionCard(result)
-                                                }
-
-                                                if let message = cnmtMessages[extractionID] {
-                                                    metadataMessageCard(message)
-                                                }
-                                            }
-                                            .padding(.vertical, 6)
-                                        }
-                                    }
-                                    .padding(10)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.secondary.opacity(0.10))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                                }
-                            }
-                            .padding(.vertical, 6)
-                            .swipeActions {
-                                Button(role: .destructive) {
-                                    deleteGame(game)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                }
+        TabView(selection: $selectedTab) {
+            HomeView(
+                gameCount: importedGames.count,
+                importAction: { showingImporter = true }
+            )
+            .tabItem {
+                Label("Home", systemImage: "house.fill")
             }
-            .navigationTitle("Games")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: importAction) {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("Import games")
-                }
-            }
-        }
-    }
+            .tag(0)
 
-    private func savedNCAResultsCard(
-        _ results: [SavedNCASectionResult],
-        gameID: UUID
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Saved NCA Section Inspection")
-                .font(.headline)
+            GamesView(
+                games: importedGames,
+                importAction: { showingImporter = true },
+                deleteAction: { game in
+                    importedGames.removeAll { $0.id == game.id }
+                    ImportedGame.save(importedGames)
 
-            ForEach(results) { item in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.fileName)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-
-                    Text("Section \(item.sectionNumber)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Label(
-                        item.inspection.isRecognized ? "PFS0 Directory Recognized" : "Directory Not Recognized",
-                        systemImage: item.inspection.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    try? FileManager.default.removeItem(
+                        at: game.fileURL
                     )
-                    .font(.caption)
-                    .foregroundStyle(item.inspection.isRecognized ? .green : .orange)
-
-                    Text(item.inspection.message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if !item.inspection.entries.isEmpty {
-                        Text("\(item.inspection.entries.count) directory entries")
-                            .font(.caption)
-                            .fontWeight(.medium)
-
-                        ForEach(Array(item.inspection.entries.prefix(50))) { entry in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.name)
-                                    .font(.caption)
-
-                                Text(
-                                    ByteCountFormatter.string(
-                                        fromByteCount: Int64(clamping: entry.size),
-                                        countStyle: .file
-                                    )
-                                )
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            }
-                            .padding(.leading, 8)
-
-                            NCASectionFileExportView(
-                                entry: entry,
-                                sourceURL: item.sourceURL,
-                                gameID: gameID
-                            )
-                            .padding(.leading, 8)
-                        }
-
-                        if item.inspection.entries.count > 50 {
-                            Text("Showing the first 50 entries.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
                 }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.secondary.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cyan.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func inspectSavedNCAs(for game: ImportedGame) {
-        guard !scanningSavedNCAs.contains(game.id) else {
-            return
-        }
-
-        scanningSavedNCAs.insert(game.id)
-        savedSectionResults.removeValue(forKey: game.id)
-        savedSectionScanMessages.removeValue(forKey: game.id)
-
-        DispatchQueue.global(qos: .utility).async {
-            do {
-                let documents = FileManager.default.urls(
-                    for: .documentDirectory,
-                    in: .userDomainMask
-                )[0]
-
-                let outputFolder = documents
-                    .appendingPathComponent("NxNativeExtracted", isDirectory: true)
-                    .appendingPathComponent(game.id.uuidString, isDirectory: true)
-
-                guard FileManager.default.fileExists(atPath: outputFolder.path) else {
-                    throw SavedNCAScanError.folderNotFound
-                }
-
-                let files = try FileManager.default.contentsOfDirectory(
-                    at: outputFolder,
-                    includingPropertiesForKeys: [.isRegularFileKey],
-                    options: [.skipsHiddenFiles]
-                )
-
-                let ncaFiles = files
-                    .filter { $0.pathExtension.lowercased() == "nca" }
-                    .sorted { $0.lastPathComponent < $1.lastPathComponent }
-
-                guard !ncaFiles.isEmpty else {
-                    throw SavedNCAScanError.noNCAFiles
-                }
-
-                var foundResults: [SavedNCASectionResult] = []
-
-                for fileURL in ncaFiles {
-                    let nca = NCAInspector.inspect(fileURL)
-
-                    guard nca.isRecognized else {
-                        continue
-                    }
-
-                    for section in nca.sections {
-                        guard section.isValid,
-                              section.fsType == 1,
-                              section.encryptionType == 1 else {
-                            continue
-                        }
-
-                        let inspection =
-                            NCASectionInspector.inspectUnencryptedPartitionFS(
-                                fileURL,
-                                section: section
-                            )
-
-                        foundResults.append(
-                            SavedNCASectionResult(
-                                id: "\(fileURL.lastPathComponent)-\(section.index)",
-                                fileName: fileURL.lastPathComponent,
-                                sectionNumber: section.index + 1,
-                                inspection: inspection,
-                                sourceURL: fileURL
-                            )
-                        )
-                    }
-                }
-
-                DispatchQueue.main.async {
-                    savedSectionResults[game.id] = foundResults
-
-                    if foundResults.isEmpty {
-                        savedSectionScanMessages[game.id] =
-                            "Scan complete: no valid unencrypted PartitionFS sections were found in the saved NCA files."
-                    } else {
-                        savedSectionScanMessages[game.id] =
-                            "Scan complete: checked \(ncaFiles.count) saved NCA file(s)."
-                    }
-
-                    scanningSavedNCAs.remove(game.id)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    savedSectionScanMessages[game.id] =
-                        "Scan could not finish: \(error.localizedDescription)"
-
-                    scanningSavedNCAs.remove(game.id)
-                }
-            }
-        }
-    }
-
-    private func metadataMessageCard(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("CNMT Metadata Status", systemImage: "info.circle")
-                .font(.subheadline)
-                .foregroundStyle(.orange)
-
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func cnmtInspectionCard(_ result: CNMTInspection) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(
-                result.isRecognized ? "CNMT Header Recognized" : "CNMT Inspection",
-                systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
             )
-            .font(.subheadline)
-            .foregroundStyle(result.isRecognized ? .green : .orange)
-
-            Text("File size: \(result.fileSize) bytes")
-                .font(.caption)
-
-            if let titleID = result.titleID {
-                Text("Title ID: \(titleID)")
-                    .font(.caption)
+            .tabItem {
+                Label("Games", systemImage: "gamecontroller.fill")
             }
+            .tag(1)
 
-            if let version = result.version {
-                Text("Version: \(version)")
-                    .font(.caption)
-            }
-
-            if let contentType = result.contentType {
-                Text("Content meta type: \(String(format: "0x%02X", contentType))")
-                    .font(.caption)
-            }
-
-            if let contentCount = result.contentCount {
-                Text("Content entries: \(contentCount)")
-                    .font(.caption)
-            }
-
-            if let contentMetaCount = result.contentMetaCount {
-                Text("Content meta entries: \(contentMetaCount)")
-                    .font(.caption)
-            }
-
-            Text(result.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func ticketInspectionCard(_ result: TicketInspection) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(
-                result.isRecognized ? "Ticket File Recognized" : "Ticket Inspection",
-                systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-            )
-            .font(.subheadline)
-            .foregroundStyle(result.isRecognized ? .green : .orange)
-
-            Text("File size: \(result.fileSize) bytes")
-                .font(.caption)
-
-            Text(result.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func ncaInspectionCard(_ result: NCAInspection) -> some View {
-        let formattedFileSize = ByteCountFormatter.string(
-            fromByteCount: Int64(clamping: result.fileSize),
-            countStyle: .file
-        )
-
-        return VStack(alignment: .leading, spacing: 8) {
-            Label(
-                result.isRecognized ? "NCA Signature Recognized" : "NCA Not Recognized",
-                systemImage: result.isRecognized ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-            )
-            .font(.subheadline)
-            .foregroundStyle(result.isRecognized ? .green : .orange)
-
-            Text("Signature: \(result.magic)")
-                .font(.caption)
-
-            if let programID = result.programID {
-                Text("Program ID: \(programID)")
-                    .font(.caption)
-            }
-
-            Text("Distribution type: \(byteDescription(result.distributionType))")
-                .font(.caption)
-
-            Text("Content type: \(byteDescription(result.contentType))")
-                .font(.caption)
-
-            Text("Key generation (old): \(byteDescription(result.keyGenerationOld))")
-                .font(.caption)
-
-            Text("Key-area encryption-key index: \(byteDescription(result.keyAreaEncryptionKeyIndex))")
-                .font(.caption)
-
-            Text("Key generation: \(byteDescription(result.keyGeneration))")
-                .font(.caption)
-
-            HStack(spacing: 6) {
-                Text("Rights ID:")
-                    .font(.caption)
-                    .fontWeight(.medium)
-
-                Text(rightsIDDescription(result.rightsIDPresent))
-                    .font(.caption)
-                    .foregroundStyle(rightsIDColor(result.rightsIDPresent))
-            }
-
-            HStack(spacing: 6) {
-                Text("Title Key Status:")
-                    .font(.caption)
-                    .fontWeight(.medium)
-
-                Text(result.titleKeyStatus ?? "Unavailable")
-                    .font(.caption)
-                    .foregroundStyle(titleKeyColor(result.titleKeyStatus))
-            }
-
-            Text("File size: \(formattedFileSize)")
-                .font(.caption)
-
-            Text(result.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            Text("NCA Section Table & Filesystem Headers")
-                .font(.headline)
-
-            if result.sections.isEmpty {
-                Text("No section entries were returned.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else {
-                ForEach(result.sections, id: \.index) { section in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            Text("Section \(section.index + 1)")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-
-                            Spacer()
-
-                            Text(section.isValid ? "Valid range" : "Empty / Check range")
-                                .font(.caption)
-                                .foregroundStyle(section.isValid ? .green : .orange)
-                        }
-
-                        Text("Start media unit: \(section.startMediaUnit)")
-                            .font(.caption)
-
-                        Text("End media unit: \(section.endMediaUnit)")
-                            .font(.caption)
-
-                        Text("Offset: \(section.offsetBytes) bytes")
-                            .font(.caption)
-
-                        let sectionSize = ByteCountFormatter.string(
-                            fromByteCount: Int64(clamping: section.sizeBytes),
-                            countStyle: .file
-                        )
-
-                        Text("Size: \(sectionSize)")
-                            .font(.caption)
-
-                        Divider()
-
-                        Text("Filesystem type: \(hex(section.fsType)) — \(filesystemName(section.fsType))")
-                            .font(.caption)
-
-                        Text("Hash type: \(hex(section.hashType)) — \(hashName(section.hashType))")
-                            .font(.caption)
-
-                        Text("Encryption type: \(hex(section.encryptionType)) — \(encryptionName(section.encryptionType))")
-                            .font(.caption)
-
-                        Text("Content status: \(section.contentStatus)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            SavedSectionFilesView()
+                .tabItem {
+                    Label("Saved Files", systemImage: "folder.fill")
                 }
+                .tag(2)
+
+            BuildView()
+                .tabItem {
+                    Label("Build", systemImage: "hammer.fill")
+                }
+                .tag(3)
+
+            OutputView()
+                .tabItem {
+                    Label("Output", systemImage: "archivebox.fill")
+                }
+                .tag(4)
+        }
+        .tint(.cyan)
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.nspGame, .xciGame],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                importGames(urls)
+
+            case .failure(let error):
+                importError = error.localizedDescription
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cyan.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func titleKeyColor(_ value: String?) -> Color {
-        guard let value else {
-            return .secondary
-        }
-
-        if value == "Matching title-key entry found" ||
-            value == "Not required: no Rights ID" {
-            return .green
-        }
-
-        return .orange
-    }
-
-    private func rightsIDDescription(_ value: Bool?) -> String {
-        guard let value else {
-            return "Unavailable"
-        }
-
-        return value ? "Present" : "Not present"
-    }
-
-    private func rightsIDColor(_ value: Bool?) -> Color {
-        guard let value else {
-            return .secondary
-        }
-
-        return value ? .orange : .green
-    }
-
-    private func byteDescription(_ value: UInt8?) -> String {
-        guard let value else {
-            return "Unavailable"
-        }
-
-        return hex(value)
-    }
-
-    private func hex(_ value: UInt8) -> String {
-        String(format: "0x%02X", value)
-    }
-
-    private func filesystemName(_ value: UInt8) -> String {
-        switch value {
-        case 0: return "RomFS"
-        case 1: return "PartitionFS"
-        default: return "Unknown"
+        .alert(
+            "Import Error",
+            isPresented: Binding(
+                get: { importError != nil },
+                set: { if !$0 { importError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                importError = nil
+            }
+        } message: {
+            Text(importError ?? "Unknown error")
         }
     }
 
-    private func hashName(_ value: UInt8) -> String {
-        switch value {
-        case 0: return "Auto"
-        case 2: return "Hierarchical SHA-256"
-        case 3: return "Hierarchical Integrity"
-        default: return "Unknown"
-        }
-    }
+    private func importGames(_ urls: [URL]) {
+        let manager = FileManager.default
 
-    private func encryptionName(_ value: UInt8) -> String {
-        switch value {
-        case 0: return "Auto"
-        case 1: return "None"
-        case 2: return "AES-XTS"
-        case 3: return "AES-CTR"
-        case 4: return "BKTR"
-        default: return "Unknown"
-        }
-    }
-
-    private func inspectGame(_ game: ImportedGame) {
-        archiveResults.removeValue(forKey: game.id)
-        archiveErrors.removeValue(forKey: game.id)
-
-        let result = GameFileInspector.inspect(game.fileURL)
-        inspectionResults[game.id] = result
-
-        guard result.format == "NSP / PFS0" else {
-            return
-        }
+        let folder = manager.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("NxNativeGames")
 
         do {
-            let archive = try PFS0Archive.open(game.fileURL)
-            archiveResults[game.id] = archive.entries
-        } catch {
-            archiveErrors[game.id] = error.localizedDescription
-        }
-    }
+            try manager.createDirectory(
+                at: folder,
+                withIntermediateDirectories: true
+            )
 
-    private func extractEntry(_ entry: PFS0Entry, from game: ImportedGame) {
-        let extractionID = "\(game.id.uuidString)-\(entry.id)"
+            for url in urls {
+                let hasAccess =
+                    url.startAccessingSecurityScopedResource()
 
-        guard !extractingEntries.contains(extractionID) else {
-            return
-        }
-
-        extractingEntries.insert(extractionID)
-        extractionProgress[extractionID] = 0
-        extractionBytes[extractionID] = 0
-        extractionMessages.removeValue(forKey: extractionID)
-        ncaResults.removeValue(forKey: extractionID)
-        ticketResults.removeValue(forKey: extractionID)
-        cnmtResults.removeValue(forKey: extractionID)
-        cnmtMessages.removeValue(forKey: extractionID)
-
-        DispatchQueue.global(qos: .utility).async {
-            do {
-                let archive = try PFS0Archive.open(game.fileURL)
-
-                let documents = FileManager.default.urls(
-                    for: .documentDirectory,
-                    in: .userDomainMask
-                )[0]
-
-                let outputFolder = documents
-                    .appendingPathComponent("NxNativeExtracted", isDirectory: true)
-                    .appendingPathComponent(game.id.uuidString, isDirectory: true)
-
-                let savedURL = try archive.extract(
-                    entry,
-                    to: outputFolder
-                ) { copied, total in
-                    DispatchQueue.main.async {
-                        extractionBytes[extractionID] = copied
-                        extractionProgress[extractionID] =
-                            total > 0 ? Double(copied) / Double(total) : 0
+                defer {
+                    if hasAccess {
+                        url.stopAccessingSecurityScopedResource()
                     }
                 }
 
-                let fileExtension = savedURL.pathExtension.lowercased()
+                let fileName = UUID().uuidString + "." +
+                    url.pathExtension.lowercased()
 
-                let ncaResult: NCAInspection? =
-                    fileExtension == "nca"
-                    ? NCAInspector.inspect(savedURL)
-                    : nil
+                let destination = folder.appendingPathComponent(fileName)
 
-                let ticketResult: TicketInspection? =
-                    fileExtension == "tik"
-                    ? TicketInspector.inspect(savedURL)
-                    : nil
+                try manager.copyItem(
+                    at: url,
+                    to: destination
+                )
 
-                let cnmtResult: CNMTInspection? =
-                    fileExtension == "cnmt"
-                    ? CNMTInspector.inspect(savedURL)
-                    : nil
+                let game = ImportedGame(
+                    name: url.deletingPathExtension().lastPathComponent,
+                    fileName: fileName
+                )
 
-                let cnmtMessage: String? =
-                    entry.name.lowercased().hasSuffix(".cnmt.nca")
-                    ? "This is a Meta NCA container. The current CNMT inspector reads plaintext .cnmt files only; it does not decrypt or inspect the contents of this NCA."
-                    : nil
-
-                DispatchQueue.main.async {
-                    extractionMessages[extractionID] =
-                        "Saved: \(savedURL.lastPathComponent)"
-
-                    if let ncaResult {
-                        ncaResults[extractionID] = ncaResult
-                    }
-
-                    if let ticketResult {
-                        ticketResults[extractionID] = ticketResult
-                    }
-
-                    if let cnmtResult {
-                        cnmtResults[extractionID] = cnmtResult
-                    }
-
-                    if let cnmtMessage {
-                        cnmtMessages[extractionID] = cnmtMessage
-                    }
-
-                    extractionProgress[extractionID] = 1
-                    extractingEntries.remove(extractionID)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    extractionMessages[extractionID] =
-                        "Extraction failed: \(error.localizedDescription)"
-
-                    extractingEntries.remove(extractionID)
-                }
+                importedGames.append(game)
             }
-        }
-    }
 
-    private func deleteGame(_ game: ImportedGame) {
-        deleteAction(game)
+            ImportedGame.save(importedGames)
 
-        inspectionResults.removeValue(forKey: game.id)
-        archiveResults.removeValue(forKey: game.id)
-        archiveErrors.removeValue(forKey: game.id)
-        savedSectionResults.removeValue(forKey: game.id)
-        savedSectionScanMessages.removeValue(forKey: game.id)
-
-        let prefix = "\(game.id.uuidString)-"
-
-        extractionMessages = extractionMessages.filter {
-            !$0.key.hasPrefix(prefix)
-        }
-
-        ncaResults = ncaResults.filter {
-            !$0.key.hasPrefix(prefix)
-        }
-
-        ticketResults = ticketResults.filter {
-            !$0.key.hasPrefix(prefix)
-        }
-
-        cnmtResults = cnmtResults.filter {
-            !$0.key.hasPrefix(prefix)
-        }
-
-        cnmtMessages = cnmtMessages.filter {
-            !$0.key.hasPrefix(prefix)
-        }
-
-        extractionProgress = extractionProgress.filter {
-            !$0.key.hasPrefix(prefix)
-        }
-
-        extractionBytes = extractionBytes.filter {
-            !$0.key.hasPrefix(prefix)
+        } catch {
+            importError = error.localizedDescription
         }
     }
 }
 
-private enum SavedNCAScanError: LocalizedError {
-    case folderNotFound
-    case noNCAFiles
+extension UTType {
+    static let nspGame =
+        UTType(filenameExtension: "nsp") ?? .data
 
-    var errorDescription: String? {
+    static let xciGame =
+        UTType(filenameExtension: "xci") ?? .data
+}
+
+enum GameContentKind: String, Codable, CaseIterable, Identifiable {
+    case unknown
+    case baseGame
+    case update
+    case downloadableContent
+
+    var id: String { rawValue }
+
+    var displayName: String {
         switch self {
-        case .folderNotFound:
-            return "The saved extraction folder for this imported game was not found."
-        case .noNCAFiles:
-            return "No saved NCA files were found in this game's extraction folder."
+        case .unknown:
+            return "Unclassified"
+        case .baseGame:
+            return "Base Game"
+        case .update:
+            return "Update"
+        case .downloadableContent:
+            return "DLC"
         }
+    }
+}
+
+struct ImportedGame: Identifiable, Codable {
+    let id: UUID
+    let name: String
+    let fileName: String
+
+    // Optional fields preserve compatibility with older saved libraries.
+    var contentKind: GameContentKind?
+    var baseGameID: UUID?
+
+    init(
+        name: String,
+        fileName: String,
+        contentKind: GameContentKind? = nil,
+        baseGameID: UUID? = nil
+    ) {
+        self.id = UUID()
+        self.name = name
+        self.fileName = fileName
+        self.contentKind = contentKind
+        self.baseGameID = baseGameID
+    }
+
+    var effectiveContentKind: GameContentKind {
+        contentKind ?? .unknown
+    }
+
+    var fileURL: URL {
+        let folder = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("NxNativeGames")
+
+        return folder.appendingPathComponent(fileName)
+    }
+
+    private static var libraryURL: URL {
+        FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("games-library.json")
+    }
+
+    static func loadSaved() -> [ImportedGame] {
+        guard let data = try? Data(contentsOf: libraryURL),
+              let games = try? JSONDecoder().decode(
+                [ImportedGame].self,
+                from: data
+              ) else {
+            return []
+        }
+
+        return games
+    }
+
+    static func save(_ games: [ImportedGame]) {
+        guard let data = try? JSONEncoder().encode(games) else {
+            return
+        }
+
+        try? data.write(to: libraryURL, options: .atomic)
     }
 }
