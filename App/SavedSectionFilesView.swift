@@ -1,4 +1,3 @@
-
 import SwiftUI
 import QuickLook
 import UIKit
@@ -10,6 +9,10 @@ struct SavedSectionFilesView: View {
     @State private var pendingDelete: SavedSectionFile?
     @State private var errorMessage: String?
 
+    private let supportedExtensions: Set<String> = [
+        "png", "gif", "jpg", "jpeg", "txt", "json", "xml"
+    ]
+
     var body: some View {
         NavigationStack {
             Group {
@@ -18,7 +21,7 @@ struct SavedSectionFilesView: View {
                         "No Saved Section Files",
                         systemImage: "folder",
                         description: Text(
-                            "Files saved from unencrypted NCA sections will appear here."
+                            "Supported files saved from unencrypted NCA sections will appear here."
                         )
                     )
                 } else {
@@ -155,19 +158,6 @@ struct SavedSectionFilesView: View {
         }
     }
 
-    private func deletePendingFile() {
-        guard let file = pendingDelete else { return }
-
-        do {
-            try FileManager.default.removeItem(at: file.url)
-            pendingDelete = nil
-            loadFiles()
-        } catch {
-            pendingDelete = nil
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func loadFiles() {
         let documents = FileManager.default.urls(
             for: .documentDirectory,
@@ -218,7 +208,7 @@ struct SavedSectionFilesView: View {
                 let savedFiles = contents.compactMap { url -> SavedSectionFile? in
                     let ext = url.pathExtension.lowercased()
 
-                    guard ext == "png" || ext == "gif" else {
+                    guard supportedExtensions.contains(ext) else {
                         return nil
                     }
 
@@ -256,10 +246,26 @@ struct SavedSectionFilesView: View {
             }
 
             groups = loadedGroups.sorted {
-                $0.gameName.localizedCaseInsensitiveCompare($1.gameName) == .orderedAscending
+                $0.gameName.localizedCaseInsensitiveCompare($1.gameName)
+                    == .orderedAscending
             }
 
         } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deletePendingFile() {
+        guard let file = pendingDelete else {
+            return
+        }
+
+        do {
+            try FileManager.default.removeItem(at: file.url)
+            pendingDelete = nil
+            loadFiles()
+        } catch {
+            pendingDelete = nil
             errorMessage = error.localizedDescription
         }
     }
@@ -275,15 +281,12 @@ private struct FileDetailsView: View {
         let attributes = try? FileManager.default.attributesOfItem(
             atPath: url.path
         )
+
         return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     private var format: String {
-        switch url.pathExtension.lowercased() {
-        case "png": return "PNG Image"
-        case "gif": return "GIF Image"
-        default: return "Unknown"
-        }
+        SavedSectionFile.formatName(for: url)
     }
 
     var body: some View {
@@ -291,6 +294,7 @@ private struct FileDetailsView: View {
             Section("File") {
                 detailRow("File name", value: url.lastPathComponent)
                 detailRow("Format", value: format)
+
                 detailRow(
                     "Size",
                     value: ByteCountFormatter.string(
@@ -298,6 +302,7 @@ private struct FileDetailsView: View {
                         countStyle: .file
                     )
                 )
+
                 detailRow("Exact size", value: "\(fileBytes) bytes")
             }
 
@@ -310,6 +315,7 @@ private struct FileDetailsView: View {
                     "Folder",
                     value: url.deletingLastPathComponent().lastPathComponent
                 )
+
                 detailRow("File location", value: url.path)
             }
 
@@ -347,6 +353,19 @@ private struct FileDetailsView: View {
 private struct SavedFileThumbnail: View {
     let url: URL
 
+    private var symbol: String {
+        switch url.pathExtension.lowercased() {
+        case "txt":
+            return "text.alignleft"
+        case "json":
+            return "curlybraces"
+        case "xml":
+            return "chevron.left.forwardslash.chevron.right"
+        default:
+            return "doc"
+        }
+    }
+
     var body: some View {
         Group {
             if let image = UIImage(contentsOfFile: url.path) {
@@ -354,7 +373,7 @@ private struct SavedFileThumbnail: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Image(systemName: "doc")
+                Image(systemName: symbol)
                     .resizable()
                     .scaledToFit()
                     .padding(18)
@@ -377,26 +396,49 @@ private struct SavedSectionFile: Identifiable {
     let url: URL
     let size: String
 
-    var id: String { url.path }
+    var id: String {
+        url.path
+    }
 
     var format: String {
+        Self.formatName(for: url)
+    }
+
+    static func formatName(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
-        case "png": return "PNG Image"
-        case "gif": return "GIF Image"
-        default: return "File"
+        case "png":
+            return "PNG Image"
+        case "gif":
+            return "GIF Image"
+        case "jpg", "jpeg":
+            return "JPEG Image"
+        case "txt":
+            return "Text File"
+        case "json":
+            return "JSON Data"
+        case "xml":
+            return "XML Document"
+        default:
+            return "File"
         }
     }
 }
 
 private struct PreviewItem: Identifiable {
     let url: URL
-    var id: String { url.path }
+
+    var id: String {
+        url.path
+    }
 }
 
 private struct FileDetailItem: Identifiable {
     let url: URL
     let gameName: String
-    var id: String { url.path }
+
+    var id: String {
+        url.path
+    }
 }
 
 private struct QuickLookPreviewController: UIViewControllerRepresentable {
